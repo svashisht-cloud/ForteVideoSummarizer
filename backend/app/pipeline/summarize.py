@@ -11,11 +11,10 @@ import logging
 import os
 from collections.abc import Callable
 
-import openai
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from app.pipeline.errors import PipelineError, openai_error_message
+from app.pipeline.errors import PipelineError
+from app.pipeline.llm import LLM, OpenAILLM, TokenCount, make_llm
 from app.pipeline.models import (
     ChunkPoints,
     LLMPoint,
@@ -210,17 +209,11 @@ def build_summary(llm: LLMSummary, blocks: list[Segment]) -> Summary:
 # --- LLM calls ---------------------------------------------------------------------
 
 
-def _add_usage(total: Usage, resp) -> None:
-    """Add one response's token counts to the running total (missing fields count as 0)."""
+def _add_counts(total: Usage, counts: TokenCount) -> None:
     total.calls += 1
-    u = getattr(resp, "usage", None)
-    if u is None:
-        log.warning("OpenAI response had no usage; cost estimate will be low")
-        return
-    total.input_tokens += getattr(u, "input_tokens", 0) or 0
-    total.output_tokens += getattr(u, "output_tokens", 0) or 0
-    details = getattr(u, "input_tokens_details", None)
-    total.cached_input_tokens += getattr(details, "cached_tokens", 0) or 0
+    total.input_tokens += counts.input_tokens
+    total.cached_input_tokens += counts.cached_input_tokens
+    total.output_tokens += counts.output_tokens
 
 
 def _priced(usage: Usage) -> Usage:
@@ -228,23 +221,10 @@ def _priced(usage: Usage) -> Usage:
     return usage
 
 
-async def _call[T: BaseModel](
-    client, model: str, instructions: str, input: str, fmt: type[T], what: str, usage: Usage
-) -> T:
-    # Streamed so bytes keep flowing: a long non-streamed call (the merge on a
-    # 1h video takes ~60s) sits idle and gets cut by ~60s idle timeouts on the
-    # network path ("Server disconnected without sending a response").
-    try:
-        async with client.responses.stream(
-            model=model, instructions=instructions, input=input, text_format=fmt
-        ) as stream:
-            resp = await stream.get_final_response()
-    except openai.APIError as e:
-        raise PipelineError(openai_error_message(e, model, what)) from e
-    _add_usage(usage, resp)
-    parsed = resp.output_parsed
-    if parsed is None:
-        raise PipelineError(f"LLM returned no structured output for {what} (refusal or empty response)")
+async def _call[T: BaseModel](llm: LLM, instructions: str, input: str, fmt: type[T], what: str, usage: Usage) -> T:
+    """One structured LLM call; adds its tokens to `usage` (also when the result is unusable)."""
+    parsed, counts = await llm.structured(instructions, input, fmt, what)
+    _add_counts(usage, counts)
     return parsed
 
 
@@ -253,27 +233,46 @@ async def summarize(
     target_lang: str,
     on_progress: ProgressFn | None = None,
     *,
-    client=None,
+    llm: LLM | None = None,
     model: str | None = None,
+    api_key: str | None = None,
+    client=None,
 ) -> Summary:
-    """Summarize a transcript in `target_lang` (a code like "en" or a language name)."""
-    model = resolve_model(model)
+    """Summarize a transcript in `target_lang` (a code like "en" or a language name).
+
+    The provider (OpenAI or Claude) follows the model; `api_key` is the user's key
+    for it (None: the server's). `llm` or an OpenAI `client` can be injected (tests)."""
+    if llm is not None:
+        model = llm.model
+    else:
+        model = resolve_model(model)
+    owned = llm is None
+    if llm is None:
+        llm = OpenAILLM(model, client=client) if client is not None else make_llm(model, api_key)
+    try:
+        return await _summarize(llm, segments, target_lang, on_progress)
+    finally:
+        if owned:
+            await llm.aclose()
+
+
+async def _summarize(llm: LLM, segments: list[Segment], target_lang: str, on_progress: ProgressFn | None) -> Summary:
+    model = llm.model
 
     blocks = normalize(segments)
     if not blocks:
         raise PipelineError("transcript is empty after cleaning")
     chunks = chunk(blocks)
     lang = language_name(target_lang)
-    client = client or AsyncOpenAI()
     progress = on_progress or (lambda stage, done, total: None)
     usage = Usage(model=model)
 
     if len(chunks) == 1:
-        llm = await _call(
-            client, model, SINGLE_PROMPT.format(lang=lang), to_prompt_text(blocks), LLMSummary, "summary", usage
+        written = await _call(
+            llm, SINGLE_PROMPT.format(lang=lang), to_prompt_text(blocks), LLMSummary, "summary", usage
         )
         progress("summarizing", 1, 1)
-        return build_summary(llm, blocks).model_copy(update={"usage": _priced(usage)})
+        return build_summary(written, blocks).model_copy(update={"usage": _priced(usage)})
 
     n = len(chunks)
     progress("summarizing", 0, n)
@@ -285,8 +284,7 @@ async def summarize(
         what = f"chunk {i + 1}/{n}"
         async with sem:
             result = await _call(
-                client,
-                model,
+                llm,
                 MAP_PROMPT.format(lang=lang),
                 f"Transcript part {i + 1} of {n}:\n\n{to_prompt_text(blocks_i)}",
                 ChunkPoints,
@@ -311,5 +309,5 @@ async def summarize(
     merge_input = "\n".join(f"[{format_ts(p.t)}] {p.text}" for pts in per_chunk for p in pts)
     if not merge_input:
         raise PipelineError("no points were extracted from any chunk")
-    llm = await _call(client, model, MERGE_PROMPT.format(lang=lang), merge_input, LLMSummary, "merge", usage)
-    return build_summary(llm, blocks).model_copy(update={"usage": _priced(usage)})
+    merged = await _call(llm, MERGE_PROMPT.format(lang=lang), merge_input, LLMSummary, "merge", usage)
+    return build_summary(merged, blocks).model_copy(update={"usage": _priced(usage)})

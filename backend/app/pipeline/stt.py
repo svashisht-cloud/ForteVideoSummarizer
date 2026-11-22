@@ -272,7 +272,13 @@ def transcribe_openai(
     cap), transcribe pieces concurrently, and shift each piece's timestamps by
     its start."""
     model = model or openai_stt_model()
-    client = client or openai.OpenAI()
+    if client is None:
+        try:
+            client = openai.OpenAI()
+        except openai.OpenAIError as e:  # no OPENAI_API_KEY
+            raise PipelineError(
+                "Speech-to-text needs an OpenAI key (in the app or backend/.env), or set STT_ENGINE=local"
+            ) from e
     with tempfile.TemporaryDirectory(prefix="yts-stt-") as work:
         work = Path(work)
         compressed = work / "audio.ogg"

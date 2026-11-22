@@ -96,7 +96,7 @@ describe('costText', () => {
 })
 
 describe('modelLabel', () => {
-  const terra = { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', input: 1, cached_input: 0.05, output: 5, cached_is_estimate: false }
+  const terra = { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', input: 1, cached_input: 0.05, output: 5, cached_is_estimate: false, provider: 'openai' as const }
   it('shows input and output price per 1M tokens', () =>
     expect(modelLabel(terra)).toBe('GPT-6.1 Terra · $1 in / $5 out per 1M tokens'))
   it('keeps cents for sub-dollar prices', () =>

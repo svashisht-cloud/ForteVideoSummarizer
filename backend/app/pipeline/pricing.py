@@ -9,6 +9,9 @@ can't be picked, and its cost shows as unknown.
 """
 
 from dataclasses import dataclass
+from typing import Literal
+
+Provider = Literal["openai", "anthropic"]
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,7 @@ class Price:
     cached_input: float
     output: float
     cached_is_estimate: bool = False  # True: cached rate assumed to be 10% of input
+    provider: Provider = "openai"
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,7 @@ class ModelInfo:
     cached_input: float
     output: float
     cached_is_estimate: bool
+    provider: Provider
 
 
 # Cheapest first; this is the order of the picker.
@@ -36,11 +41,27 @@ PRICES: dict[str, Price] = {
     "gpt-6.1-terra": Price("GPT-6.1 Terra", input=1.00, cached_input=0.05, output=5.00),
     "gpt-6.1-sol": Price("GPT-6.1 Sol", input=2.00, cached_input=0.10, output=10.00),
     "gpt-6-astra": Price("GPT-6 Astra", input=10.00, cached_input=1.00, output=50.00, cached_is_estimate=True),
+    # Anthropic first-party rates (claude-api reference, cached 2026-11-03). Haiku 5.5's
+    # price is for prompts up to 100K tokens; our chunks are well under that.
+    "claude-haiku-5-5": Price(
+        "Claude Haiku 5.5", input=0.10, cached_input=0.01, output=0.50, cached_is_estimate=True, provider="anthropic"
+    ),
+    "claude-sonnet-5-5": Price("Claude Sonnet 5.5", input=2.00, cached_input=0.10, output=10.00, provider="anthropic"),
+    "claude-opus-5-5": Price("Claude Opus 5.5", input=4.00, cached_input=0.20, output=20.00, provider="anthropic"),
 }
+DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5"
 
 
 def available_models() -> list[ModelInfo]:
     return [ModelInfo(id=k, **vars(p)) for k, p in PRICES.items()]
+
+
+def provider_for(model: str) -> Provider:
+    """The API a model is called through. Unknown models are treated as OpenAI's."""
+    price = price_for(model)
+    if price is not None:
+        return price.provider
+    return "anthropic" if model.startswith("claude-") else "openai"
 
 
 def is_known_model(model: str) -> bool:

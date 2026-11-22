@@ -1,7 +1,6 @@
 // Browser storage helpers. Every access is wrapped: storage can be unavailable
 // (private windows, blocked site data) and the app must still work without it.
 
-const KEY_NAME = 'openai-key'
 const MODEL_NAME = 'model'
 
 function get(store: () => Storage, name: string): string | null {
@@ -24,18 +23,56 @@ function set(store: () => Storage, name: string, value: string | null): void {
 const session = () => sessionStorage
 const local = () => localStorage
 
-/** The saved key and whether it's remembered across browser sessions. */
-export function loadApiKey(): { key: string; remember: boolean } {
-  const remembered = get(local, KEY_NAME)
-  if (remembered) return { key: remembered, remember: true }
-  return { key: get(session, KEY_NAME) ?? '', remember: false }
+const LEGACY_KEY = 'openai-key' // before per-provider keys
+const keyName = (provider: string) => `key.${provider}`
+
+/** Move the old single OpenAI key to the per-provider slot (same storage). */
+function migrateLegacyKey(): void {
+  for (const store of [local, session]) {
+    const old = get(store, LEGACY_KEY)
+    if (old) {
+      if (!get(store, keyName('openai'))) set(store, keyName('openai'), old)
+      set(store, LEGACY_KEY, null)
+    }
+  }
 }
 
-/** Session storage by default (cleared when the tab closes); local storage only if `remember`. */
-export function saveApiKey(key: string, remember: boolean): void {
+/** The user's saved key for a provider. `remember`: kept on this device (the
+ * default) rather than only until the tab closes. */
+export function loadKey(provider: string): { key: string; remember: boolean } {
+  migrateLegacyKey()
+  const remembered = get(local, keyName(provider))
+  if (remembered) return { key: remembered, remember: true }
+  const sessionOnly = get(session, keyName(provider))
+  return sessionOnly ? { key: sessionOnly, remember: false } : { key: '', remember: true }
+}
+
+export function saveKey(provider: string, key: string, remember: boolean): void {
   const value = key.trim() || null
-  set(remember ? local : session, KEY_NAME, value)
-  set(remember ? session : local, KEY_NAME, null)
+  set(remember ? local : session, keyName(provider), value)
+  set(remember ? session : local, keyName(provider), null)
+}
+
+export function forgetKey(provider: string): void {
+  set(local, keyName(provider), null)
+  set(session, keyName(provider), null)
+}
+
+/** Has the visitor been through the welcome screen? */
+export function loadOnboarded(): boolean {
+  return get(local, 'onboarded') === '1'
+}
+
+export function saveOnboarded(): void {
+  set(local, 'onboarded', '1')
+}
+
+export function loadProvider(): 'openai' | 'anthropic' {
+  return get(local, 'provider') === 'anthropic' ? 'anthropic' : 'openai'
+}
+
+export function saveProvider(provider: 'openai' | 'anthropic'): void {
+  set(local, 'provider', provider)
 }
 
 export function loadModel(): string | null {

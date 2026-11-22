@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.pipeline.pricing import available_models, cost_usd, is_known_model, price_for
+from app.pipeline.pricing import available_models, cost_usd, is_known_model, price_for, provider_for
 
 
 def test_known_model_cost():
@@ -29,7 +29,10 @@ def test_cached_never_exceeds_input():
 def test_available_models_lists_priced_models_cheapest_first():
     models = available_models()
     ids = [m.id for m in models]
-    assert ids == ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]
+    assert ids == [
+        "gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra",
+        "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5",
+    ]  # fmt: skip
     terra = models[1]
     assert (terra.label, terra.input, terra.cached_input, terra.output) == ("GPT-6.1 Terra", 1.00, 0.05, 5.00)
 
@@ -38,3 +41,15 @@ def test_is_known_model():
     assert is_known_model("gpt-6.1-sol")
     assert not is_known_model("gpt-6.1-sol-2026-10-01")  # picker offers exact IDs only
     assert not is_known_model("gpt-4o")
+
+
+def test_provider_for():
+    assert provider_for("gpt-6.1-terra") == "openai"
+    assert provider_for("claude-opus-5-5") == "anthropic"
+    assert provider_for("claude-something-new") == "anthropic"  # not priced, but clearly Claude
+    assert provider_for("mystery") == "openai"
+
+
+def test_claude_cost():
+    # Opus 5.5: $4 in, $0.20 cache read, $20 out per 1M
+    assert cost_usd("claude-opus-5-5", 1_000_000, 500_000, 100_000) == pytest.approx(0.5 * 4 + 0.5 * 0.2 + 0.1 * 20)

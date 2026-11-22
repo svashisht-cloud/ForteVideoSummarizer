@@ -32,10 +32,11 @@ URL → video ID → transcript segments → normalize (~30s blocks) → chunk (
 - No separate translation step. The LLM reads the original-language transcript and writes the summary directly in the target language.
 
 **LLM**
-- OpenAI. Every LLM call lives in `summarize.py` behind `summarize(segments, target_lang, on_progress=None)`.
-- The user picks the model in the UI from the allowlist in `pricing.py` (`PRICES`: GPT-6 Luna, GPT-6.1 Terra, GPT-6.1 Sol, GPT-6 Astra). `OPENAI_MODEL` is the default and is always allowed. Add a model only after checking it with `models.list()` and a structured-output call.
+- OpenAI or Anthropic (Claude), chosen by the model. Every LLM call goes through `llm.py` (`OpenAILLM`: Responses API + `text_format`; `AnthropicLLM`: Messages API + `output_format`, effort `medium`, streamed) behind `summarize(segments, target_lang, on_progress=None)`. Check each SDK's installed API before changing calls.
+- The user picks the model in the UI from the allowlist in `pricing.py` (`PRICES`, each with a `provider`: GPT-6 Luna, GPT-6.1 Terra, GPT-6.1 Sol, GPT-6 Astra; Claude Haiku 5.5, Sonnet 5.5, Opus 5.5). Defaults: `OPENAI_MODEL`, and `ANTHROPIC_MODEL` (default `claude-opus-5-5`); `OPENAI_MODEL` is always allowed. Add a model only after checking it with `models.list()` and a structured-output call.
 - Token usage from every LLM call is summed into `Summary.usage` (cached with the summary) and priced from `PRICES` (USD per 1M tokens). A model with no price shows tokens with no dollar figure. Speech-to-text cost isn't included.
-- Users may send their own OpenAI key in the `X-OpenAI-Key` header. It is used only to build that job's OpenAI clients (summaries and OpenAI speech-to-text) and is never stored, logged, cached, or returned. Without a header the server's `OPENAI_API_KEY` is used, unless `REQUIRE_USER_KEY=true` (for deployment), which makes the key required for anything that isn't a full cache hit. Never put the key in a URL.
+- Users may send their own key for the model's provider in the `X-LLM-Key` header (`X-OpenAI-Key` still accepted). It is used only to build that job's clients and is never stored, logged, cached, or returned; an OpenAI key also powers OpenAI speech-to-text. A key is required (for anything that isn't a full cache hit) when `REQUIRE_USER_KEY=true` or the server has no key for that provider (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`). `POST /keys/check` validates a key with a free `models.list` call. Never put a key in a URL.
+- The frontend keeps keys per provider in `localStorage` by default (opt out: session only) and shows a first-visit welcome (Free vs AI cards, key step for AI when needed) before the Studio; the link bar moves into the sidebar with a View Transition.
 - Structured outputs with Pydantic models. The LLM returns timestamps as the **exact `m:ss` string** from the `[m:ss]` markers it was given; code parses them to seconds and snaps each one to the nearest block start.
 
 **Free mode (no AI)**
@@ -102,7 +103,8 @@ backend/
       captions.py     # fetch_captions
       stt.py          # download_audio, transcribe engines
       transcript.py   # get_transcript: captions → fallback
-      summarize.py    # map / merge LLM calls
+      summarize.py    # map / merge orchestration
+      llm.py          # OpenAI + Claude adapters, key check
       tts.py          # Kokoro text-to-speech, voice shortlist
       extract.py      # free mode: TextRank key moments
       cache.py

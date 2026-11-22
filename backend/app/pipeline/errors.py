@@ -40,3 +40,28 @@ def openai_error_message(e: Exception, model: str, what: str) -> str:
             return "This OpenAI account is out of credit (insufficient quota). Add billing credit or use another key."
         return "OpenAI rate limit reached. Wait a moment and try again."
     return f"OpenAI request failed for {what}: {type(e).__name__}: {e}"
+
+
+def anthropic_error_message(e: Exception, model: str, what: str) -> str:
+    """Readable message for an Anthropic (Claude) API error; never includes the key."""
+    import anthropic  # local import: errors.py stays importable without the SDK
+
+    if isinstance(e, anthropic.AuthenticationError):
+        return "Your Claude API key was rejected. Check that it's correct and active."
+    if isinstance(e, anthropic.PermissionDeniedError):
+        return f"This Claude API key isn't allowed to use {model}."
+    if isinstance(e, anthropic.NotFoundError):
+        return f"This Claude API key doesn't have access to {model}."
+    if isinstance(e, anthropic.RateLimitError):
+        return "Claude rate limit reached. Wait a moment and try again."
+    if isinstance(e, anthropic.BadRequestError) and "credit balance" in str(e).lower():
+        return "This Claude account is out of credit. Add billing credit or use another key."
+    if isinstance(e, anthropic.APIStatusError):
+        return f"Claude request failed for {what}: {type(e).__name__} ({e.status_code})"
+    return f"Claude request failed for {what}: {type(e).__name__}"
+
+
+def llm_error_message(e: Exception, provider: str, model: str, what: str) -> str:
+    if provider == "anthropic":
+        return anthropic_error_message(e, model, what)
+    return openai_error_message(e, model, what)

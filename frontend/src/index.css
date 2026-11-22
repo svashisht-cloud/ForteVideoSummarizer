@@ -85,3 +85,41 @@
     background: color-mix(in srgb, var(--accent) 22%, transparent);
   }
 }
+
+/* Link field pulse after arriving from the welcome screen. */
+@keyframes attention {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+}
+.animate-attention {
+  animation: attention 1.2s ease-in-out 3;
+  border-color: var(--accent);
+}
+
+/* Welcome screen: a soft accent glow behind the content. */
+.welcome-glow {
+  background:
+    radial-gradient(circle at 20% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34rem),
+    radial-gradient(circle at 85% 10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30rem),
+    var(--background);
+}
+
+/* Welcome → studio: the link bar glides into the sidebar, everything else cross-fades. */
+::view-transition-group(url-bar) {
+  animation-duration: 600ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 380ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-attention {
+    animation: none;
+  }
+}

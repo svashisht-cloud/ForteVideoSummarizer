@@ -54,6 +54,20 @@ class Fakes:
         return SUMMARY
 
 
+class FakeLLM:
+    def __init__(self, model, api_key):
+        self.model, self.api_key = model, api_key
+        self.provider = "anthropic" if model.startswith("claude-") else "openai"
+
+    async def aclose(self):
+        pass
+
+
+class FakeSTT:
+    def close(self):
+        pass
+
+
 @pytest.fixture
 def fakes(monkeypatch, tmp_path):
     f = Fakes()
@@ -63,6 +77,9 @@ def fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(main, "JOBS", {})
     monkeypatch.delenv("REQUIRE_USER_KEY", raising=False)
+    monkeypatch.setattr(main, "server_has_key", lambda provider: True)
+    monkeypatch.setattr(main, "make_llm", lambda model, api_key=None: FakeLLM(model, api_key))
+    monkeypatch.setattr(main, "make_stt_client", lambda api_key: FakeSTT() if api_key else None)
     return f
 
 
@@ -206,10 +223,10 @@ def test_models_endpoint(fakes, client):
     body = client.get("/models").json()
     assert body["default"] == MODEL
     assert body["require_user_key"] is False
-    assert [m["id"] for m in body["models"]] == ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]
+    assert [m["id"] for m in body["models"]][:4] == ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]
     assert body["models"][1] | {} == {
         "id": "gpt-6.1-terra", "label": "GPT-6.1 Terra", "input": 1.0, "cached_input": 0.05, "output": 5.0,
-        "cached_is_estimate": False,
+        "cached_is_estimate": False, "provider": "openai",
     }  # fmt: skip
 
 
@@ -242,53 +259,71 @@ def test_summary_cache_is_per_model(fakes, client, tmp_path):
     assert get(client, r.json()["job_id"])["result"]["summary_cached"] is True
 
 
-# --- user's own API key ---------------------------------------------------------------
+# --- user's own API key / providers ------------------------------------------------
 
 KEY = "sk-test-user-key-1234"
 
 
 @pytest.fixture
 def clients(monkeypatch):
-    """Records the keys clients are built from; returns marker objects instead of real clients."""
-    made = []
+    """Records (model, key) for every LLM built, and keys for speech-to-text clients."""
+    made = {"llm": [], "stt": []}
 
-    class FakeAsync:
-        async def close(self):
-            pass
+    def make_llm(model, api_key=None):
+        made["llm"].append((model, api_key))
+        return FakeLLM(model, api_key)
 
-    class FakeSync:
-        def close(self):
-            pass
+    def make_stt_client(api_key):
+        made["stt"].append(api_key)
+        return FakeSTT() if api_key else None
 
-    def make(api_key):
-        made.append(api_key)
-        return (FakeAsync(), FakeSync()) if api_key else (None, None)
-
-    monkeypatch.setattr(main, "make_openai_clients", make)
+    monkeypatch.setattr(main, "make_llm", make_llm)
+    monkeypatch.setattr(main, "make_stt_client", make_stt_client)
     return made
 
 
-def test_user_key_builds_clients_for_the_job(fakes, client, clients, caplog):
+def test_user_key_reaches_the_llm_and_stt(fakes, client, clients, caplog):
     with caplog.at_level(logging.DEBUG):
-        r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-OpenAI-Key": f"  {KEY} "})
+        r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-LLM-Key": f"  {KEY} "})
         job_text = client.get(f"/jobs/{r.json()['job_id']}").text
-    assert clients == [KEY]
-    assert fakes.summarize_kwargs["client"] is not None
+    assert clients["llm"] == [(MODEL, KEY)]
+    assert clients["stt"] == [KEY]  # an OpenAI key also powers OpenAI speech-to-text
+    assert fakes.summarize_kwargs["llm"].api_key == KEY
     assert fakes.transcript_kwargs["openai_client"] is not None
     assert KEY not in job_text
     assert KEY not in caplog.text
 
 
+def test_old_openai_header_still_works(fakes, client, clients):
+    client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-OpenAI-Key": KEY})
+    assert clients["llm"] == [(MODEL, KEY)]
+
+
 def test_no_key_uses_server_defaults(fakes, client, clients):
     start(client)
-    assert clients == [None]
-    assert fakes.summarize_kwargs["client"] is None
+    assert clients["llm"] == [(MODEL, None)]
+    assert fakes.transcript_kwargs["openai_client"] is None
+
+
+def test_claude_key_is_not_used_for_openai_stt(fakes, client, clients):
+    r = client.post("/jobs", json={"url": URL, "lang": "en", "model": "claude-opus-5-5"}, headers={"X-LLM-Key": KEY})
+    assert get(client, r.json()["job_id"])["status"] == "done"
+    assert clients["llm"] == [("claude-opus-5-5", KEY)]
+    assert clients["stt"] == [None]
+
+
+def test_key_needed_when_server_has_none_for_the_provider(fakes, client, clients, monkeypatch):
+    monkeypatch.setattr(main, "server_has_key", lambda provider: provider == "openai")
+    r = client.post("/jobs", json={"url": URL, "lang": "en", "model": "claude-sonnet-5-5"})
+    assert r.status_code == 400
+    assert "Add your Claude API key" in r.json()["detail"]
+    assert client.post("/jobs", json={"url": URL, "lang": "en"}).status_code == 200  # OpenAI: server key
 
 
 def test_key_never_in_error_output(fakes, client, clients, caplog):
     fakes.summarize_error = PipelineError("Your OpenAI API key was rejected. Check that it's correct and active.")
     with caplog.at_level(logging.DEBUG):
-        r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-OpenAI-Key": KEY})
+        r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-LLM-Key": KEY})
         job = get(client, r.json()["job_id"])
     assert job["error"].startswith("Your OpenAI API key was rejected")
     assert KEY not in str(job)
@@ -300,16 +335,40 @@ def test_require_user_key(fakes, client, clients, monkeypatch, tmp_path):
     assert client.get("/models").json()["require_user_key"] is True
     r = client.post("/jobs", json={"url": URL, "lang": "en"})
     assert r.status_code == 400
-    assert "your own OpenAI API key" in r.json()["detail"]
+    assert "Add your OpenAI API key" in r.json()["detail"]
     assert fakes.calls == []
     # With a key it runs.
-    r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-OpenAI-Key": KEY})
+    r = client.post("/jobs", json={"url": URL, "lang": "en"}, headers={"X-LLM-Key": KEY})
     assert get(client, r.json()["job_id"])["status"] == "done"
     # Cache hits stay free without a key. (The faked get_transcript doesn't write the transcript cache.)
     cache.save_transcript(VID, SEGMENTS, "en", "captions", cache_dir=tmp_path)
     r = client.post("/jobs", json={"url": URL, "lang": "en"})
     assert r.status_code == 200
     assert get(client, r.json()["job_id"])["result"]["summary_cached"] is True
+
+
+def test_models_lists_providers_defaults_and_server_keys(fakes, client, monkeypatch):
+    monkeypatch.setattr(main, "server_has_key", lambda provider: provider == "openai")
+    body = client.get("/models").json()
+    assert body["defaults"] == {"openai": MODEL, "anthropic": "claude-opus-5-5"}
+    assert body["server_keys"] == {"openai": True, "anthropic": False}
+    by_id = {m["id"]: m["provider"] for m in body["models"]}
+    assert by_id["gpt-6.1-terra"] == "openai" and by_id["claude-opus-5-5"] == "anthropic"
+
+
+def test_key_check(client, monkeypatch, caplog):
+    async def fake_check(provider, api_key):
+        return None if api_key == KEY else "Your Claude API key was rejected. Check that it's correct and active."
+
+    monkeypatch.setattr(main, "check_key", fake_check)
+    with caplog.at_level(logging.DEBUG):
+        ok = client.post("/keys/check", json={"provider": "anthropic"}, headers={"X-LLM-Key": KEY})
+        bad = client.post("/keys/check", json={"provider": "anthropic"}, headers={"X-LLM-Key": "sk-wrong-key-000"})
+    assert ok.json() == {"ok": True, "error": None}
+    assert bad.json()["ok"] is False and "rejected" in bad.json()["error"]
+    assert client.post("/keys/check", json={"provider": "anthropic"}).status_code == 400  # no key
+    assert client.post("/keys/check", json={"provider": "gemini"}, headers={"X-LLM-Key": KEY}).status_code == 422
+    assert KEY not in caplog.text
 
 
 # --- text to speech -------------------------------------------------------------------

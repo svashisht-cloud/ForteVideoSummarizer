@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { getModels, getTtsVoices, type Mode, type ModelsResponse, type TtsCatalog } from './api'
 import { JobForm } from './components/JobForm'
+import { LinkGuide } from './components/LinkGuide'
 import { ReaderPane } from './components/ReaderPane'
 import { NowViewing, Outline, Wordmark } from './components/Sidebar'
-import { EmptyState, ErrorBox, Progress } from './components/Status'
+import { ErrorBox, Progress } from './components/Status'
+import { Welcome } from './components/Welcome'
 import { PlayerProvider } from './player'
-import { loadMode, saveMode } from './storage'
+import { loadMode, loadOnboarded, saveMode, saveOnboarded } from './storage'
 import { useJob } from './useJob'
 
 type Request = [url: string, lang: string, model: string | null, apiKey: string | null, mode: Mode]
+
+/** Animate a layout change with the View Transitions API when available (the
+ * link bar has the same view-transition-name in both layouts, so it glides
+ * from the welcome screen into the sidebar). Instant otherwise. */
+function withTransition(update: () => void) {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown }
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (!doc.startViewTransition || reduce) return update()
+  doc.startViewTransition(() => flushSync(update))
+}
 
 export default function App() {
   const { job, error, running, start } = useJob()
@@ -16,6 +29,9 @@ export default function App() {
   const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null)
   const [request, setRequest] = useState<Request | null>(null)
   const [mode, setMode] = useState<Mode>(loadMode)
+  const [welcome, setWelcome] = useState(() => !loadOnboarded()) // first visit
+  const [arrived, setArrived] = useState(false) // just came from the welcome screen
+  const [url, setUrl] = useState('')
   const [editing, setEditing] = useState(false)
   const [formKey, setFormKey] = useState(0) // bump to reset the form ("New summary")
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
@@ -33,7 +49,21 @@ export default function App() {
       .catch(() => setTtsCatalog(null))
   }, [])
 
+  function choose(m: Mode) {
+    changeMode(m)
+    saveOnboarded()
+    withTransition(() => {
+      setWelcome(false)
+      setArrived(true)
+    })
+  }
+
+  function showWelcome() {
+    withTransition(() => setWelcome(true))
+  }
+
   function submit(...req: Request) {
+    setArrived(false)
     last.current = req
     setRequest(req)
     setEditing(false)
@@ -76,12 +106,27 @@ export default function App() {
   const result = job?.status === 'done' ? job.result : null
   const showForm = !result || editing
 
+  if (welcome) {
+    return <Welcome models={models} url={url} onUrlChange={setUrl} onChoose={choose} />
+  }
+
   return (
     <PlayerProvider>
       <div className="lg:grid lg:h-dvh lg:grid-cols-[minmax(320px,380px)_1fr]">
         <aside className="border-b border-border bg-sidebar lg:overflow-y-auto lg:border-r lg:border-b-0">
           <div className="space-y-7 px-5 py-5 lg:py-6">
-            <Wordmark />
+            <div className="flex items-center justify-between gap-3">
+              <Wordmark />
+              <button
+                type="button"
+                onClick={showWelcome}
+                title="Free or AI? Show the welcome screen"
+                aria-label="Show the welcome screen"
+                className="grid size-7 place-items-center rounded-full text-sm text-dim hover:bg-foreground/5 hover:text-foreground"
+              >
+                ?
+              </button>
+            </div>
             {result && request && (
               <NowViewing
                 result={result}
@@ -93,6 +138,7 @@ export default function App() {
                 onEdit={() => setEditing((e) => !e)}
                 onNew={() => {
                   setFormKey((k) => k + 1)
+                  setUrl('')
                   setEditing(true)
                 }}
               />
@@ -104,6 +150,9 @@ export default function App() {
                 models={models}
                 mode={mode}
                 onModeChange={changeMode}
+                url={url}
+                onUrlChange={setUrl}
+                attention={arrived}
                 onSubmit={submit}
               />
             </div>
@@ -137,7 +186,14 @@ export default function App() {
               onSectionInView={setActiveSection}
             />
           )}
-          {!running && !error && !result && <EmptyState />}
+          {!running && !error && !result && (
+            <LinkGuide
+              onExample={(u) => {
+                setUrl(u)
+                document.getElementById('youtube-link')?.focus()
+              }}
+            />
+          )}
         </main>
       </div>
     </PlayerProvider>

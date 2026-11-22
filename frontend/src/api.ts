@@ -4,6 +4,7 @@ export type Status = 'queued' | 'running' | 'done' | 'error'
 /** 'free': no AI, key moments from the captions. 'ai': LLM summary. */
 export type Mode = 'free' | 'ai'
 export type SummaryMethod = 'ai' | 'extractive'
+export type Provider = 'openai' | 'anthropic'
 export type Stage = 'fetching_captions' | 'downloading_audio' | 'transcribing' | 'summarizing' | 'merging'
 
 export interface Progress {
@@ -96,10 +97,14 @@ export interface ModelOption {
   cached_input: number
   output: number
   cached_is_estimate: boolean
+  provider: Provider
 }
 
 export interface ModelsResponse {
   default: string | null
+  defaults: Record<Provider, string | null>
+  /** Does the server have its own key for this provider? */
+  server_keys: Record<Provider, boolean>
   require_user_key: boolean
   models: ModelOption[]
 }
@@ -143,7 +148,7 @@ export async function fetchSpeech(text: string, lang: string, voice: string, sig
   return res.blob()
 }
 
-/** `apiKey`: the user's own OpenAI key. Sent only as a header, never in the URL or body. */
+/** `apiKey`: the user's own key for the model's provider. Sent only as a header, never in the URL or body. */
 export function createJob(
   url: string,
   lang: string,
@@ -152,7 +157,7 @@ export function createJob(
   mode: Mode,
 ): Promise<{ job_id: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (apiKey && mode === 'ai') headers['X-OpenAI-Key'] = apiKey
+  if (apiKey && mode === 'ai') headers['X-LLM-Key'] = apiKey
   return request('/jobs', {
     method: 'POST',
     headers,
@@ -162,4 +167,14 @@ export function createJob(
 
 export function getJob(id: string): Promise<Job> {
   return request(`/jobs/${encodeURIComponent(id)}`)
+}
+
+/** Checks a key with the provider (free call). Returns null if it works, else a readable error. */
+export async function checkKey(provider: Provider, key: string): Promise<string | null> {
+  const res = await request<{ ok: boolean; error: string | null }>('/keys/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LLM-Key': key },
+    body: JSON.stringify({ provider }),
+  })
+  return res.ok ? null : (res.error ?? 'This key didn’t work.')
 }

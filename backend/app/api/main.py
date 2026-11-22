@@ -1,7 +1,8 @@
 """HTTP API: start a summary job, poll its status.
 
 GET  /models                 -> {default, require_user_key, models: [...]}
-POST /jobs {url, lang, model?, mode?} (+ optional X-OpenAI-Key header) -> {job_id}
+POST /jobs {url, lang, model?, mode?} (+ optional X-LLM-Key header) -> {job_id}
+POST /keys/check {provider} (+ X-LLM-Key) -> {ok, error}
 GET  /jobs/{id}              -> {status, stage, progress, result, error}
 GET  /tts/voices             -> {lang: {default, voices: [...]}} (languages with a natural voice)
 POST /tts {text, lang, voice?} -> audio/wav
@@ -12,8 +13,8 @@ yt-dlp, speech-to-text) runs in a worker thread so the server stays responsive.
 mode "ai" (default): LLM summary in `lang`. mode "free": no LLM, captions only;
 key moments are extracted from the captions in the video's own language.
 
-A user's own OpenAI key (X-OpenAI-Key) is used only to build OpenAI clients for
-that one job. It is passed to the background task as an argument and never put
+A user's own key (X-LLM-Key; X-OpenAI-Key still accepted) is for the chosen
+model's provider (OpenAI or Claude) and is used only to build that job's clients. It is passed to the background task as an argument and never put
 on JobStatus (which GET /jobs returns), in a log line, or in the cache.
 """
 
@@ -40,7 +41,8 @@ from app.pipeline.errors import (
 from app.pipeline.extract import EXTRACT_VERSION, key_moments
 from app.pipeline.models import Segment, Summary, VideoMetadata
 from app.pipeline.normalize import normalize
-from app.pipeline.pricing import available_models, is_known_model
+from app.pipeline.llm import PROVIDERS, check_key, make_llm
+from app.pipeline.pricing import DEFAULT_ANTHROPIC_MODEL, available_models, is_known_model, provider_for
 from app.pipeline.stt import video_metadata
 from app.pipeline.summarize import PROMPT_VERSION, resolve_model, summarize
 from app.pipeline.transcript import get_transcript
@@ -115,12 +117,24 @@ class ModelOption(BaseModel):
     cached_input: float
     output: float
     cached_is_estimate: bool
+    provider: Literal["openai", "anthropic"]
 
 
 class ModelsResponse(BaseModel):
-    default: str | None
+    default: str | None  # OpenAI default (OPENAI_MODEL); kept for older clients
+    defaults: dict[str, str | None]  # per provider
+    server_keys: dict[str, bool]  # does this server have a key for the provider?
     require_user_key: bool
     models: list[ModelOption]
+
+
+class KeyCheckRequest(BaseModel):
+    provider: Literal["openai", "anthropic"]
+
+
+class KeyCheckResult(BaseModel):
+    ok: bool
+    error: str | None = None
 
 
 JOBS: dict[str, JobStatus] = {}
@@ -143,12 +157,22 @@ def error_message(exc: BaseException, stage: str | None) -> str:
     return f"Unexpected error: {type(exc).__name__}: {exc}"
 
 
-def make_openai_clients(api_key: str | None) -> tuple[openai.AsyncOpenAI | None, openai.OpenAI | None]:
-    """(async client for summaries, sync client for speech-to-text) for a user's key.
-    (None, None) means the pipeline's defaults, which read OPENAI_API_KEY."""
-    if not api_key:
-        return None, None
-    return openai.AsyncOpenAI(api_key=api_key), openai.OpenAI(api_key=api_key)
+PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Claude"}
+SERVER_KEY_VARS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+
+def server_has_key(provider: str) -> bool:
+    """Is there a server-side key (in backend/.env) for this provider?"""
+    return bool(os.environ.get(SERVER_KEY_VARS.get(provider, ""), "").strip())
+
+
+def make_stt_client(api_key: str | None) -> openai.OpenAI | None:
+    """OpenAI client for speech-to-text with a user's OpenAI key (None: server default)."""
+    return openai.OpenAI(api_key=api_key) if api_key else None
+
+
+def _anthropic_default() -> str:
+    return os.environ.get("ANTHROPIC_MODEL", "").strip() or DEFAULT_ANTHROPIC_MODEL
 
 
 def _default_model() -> str | None:
@@ -265,10 +289,14 @@ async def run_job(job: JobStatus, video_id: str, lang: str, model: str, api_key:
         job.stage = stage
         job.progress = Progress(done=done, total=total)
 
-    async_client, sync_client = make_openai_clients(api_key)
+    provider = provider_for(model)
+    llm = stt_client = None
     try:
+        llm = make_llm(model, api_key)
+        # Speech-to-text (STT_ENGINE=openai) can only use an OpenAI key.
+        stt_client = make_stt_client(api_key if provider == "openai" else None)
         segments, language, source = await asyncio.to_thread(
-            get_transcript, video_id, on_stage, cache_dir=CACHE_DIR, openai_client=sync_client
+            get_transcript, video_id, on_stage, cache_dir=CACHE_DIR, openai_client=stt_client
         )
         summary = await asyncio.to_thread(
             cache.load_summary, video_id, lang, model, PROMPT_VERSION, cache_dir=CACHE_DIR
@@ -276,7 +304,7 @@ async def run_job(job: JobStatus, video_id: str, lang: str, model: str, api_key:
         summary_cached = summary is not None
         if summary is None:
             job.stage = "summarizing"
-            summary = await summarize(segments, lang, on_progress, model=model, client=async_client)
+            summary = await summarize(segments, lang, on_progress, llm=llm, model=model)
             await asyncio.to_thread(
                 cache.save_summary, video_id, lang, summary, model, PROMPT_VERSION, cache_dir=CACHE_DIR
             )
@@ -292,10 +320,10 @@ async def run_job(job: JobStatus, video_id: str, lang: str, model: str, api_key:
         job.error = error_message(e, job.stage)
         job.status = "error"
     finally:
-        if async_client is not None:
-            await async_client.close()
-        if sync_client is not None:
-            sync_client.close()
+        if llm is not None:
+            await llm.aclose()
+        if stt_client is not None:
+            stt_client.close()
 
 
 app = FastAPI(title="YouTube Summarizer")
@@ -308,6 +336,8 @@ app.add_middleware(
 async def list_models() -> ModelsResponse:
     return ModelsResponse(
         default=_default_model(),
+        defaults={"openai": _default_model(), "anthropic": _anthropic_default()},
+        server_keys={p: server_has_key(p) for p in PROVIDERS},
         require_user_key=require_user_key(),
         models=[ModelOption(**vars(m)) for m in available_models()],
     )
@@ -317,6 +347,7 @@ async def list_models() -> ModelsResponse:
 async def create_job(
     req: JobRequest,
     background_tasks: BackgroundTasks,
+    x_llm_key: Annotated[str | None, Header()] = None,
     x_openai_key: Annotated[str | None, Header()] = None,
 ) -> JobCreated:
     try:
@@ -338,11 +369,14 @@ async def create_job(
         return JobCreated(job_id=job_id)
 
     model = _pick_model(req.model)
-    api_key = (x_openai_key or "").strip() or None
+    api_key = (x_llm_key or x_openai_key or "").strip() or None
+    provider = provider_for(model)
 
     cached = await asyncio.to_thread(_cached_result, video_id, lang, model)
-    if cached is None and api_key is None and require_user_key():
-        raise HTTPException(status_code=400, detail="This server needs your own OpenAI API key to summarize new videos.")
+    if cached is None and api_key is None and (require_user_key() or not server_has_key(provider)):
+        raise HTTPException(
+            status_code=400, detail=f"Add your {PROVIDER_NAMES[provider]} API key to use {PROVIDER_NAMES[provider]} models."
+        )
 
     job = JOBS[job_id] = JobStatus()
     if cached is not None:
@@ -377,3 +411,13 @@ async def speak(req: SpeechRequest) -> Response:
     except PipelineError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return Response(content=data, media_type="audio/wav", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/keys/check", response_model=KeyCheckResult)
+async def keys_check(req: KeyCheckRequest, x_llm_key: Annotated[str | None, Header()] = None) -> KeyCheckResult:
+    """Checks a user's key with a free models.list call. The key isn't logged or stored."""
+    api_key = (x_llm_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Send the key in the X-LLM-Key header.")
+    error = await check_key(req.provider, api_key)
+    return KeyCheckResult(ok=error is None, error=error)
