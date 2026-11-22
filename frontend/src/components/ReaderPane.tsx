@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { JobResult, TtsCatalog } from '../api'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import type { JobResult, Summary, TtsCatalog } from '../api'
 import { costText, formatTs } from '../format'
 import { usePlayer } from '../playerContext'
 import { pointAtTime, summaryToMarkdown, summaryToText, TEXT_SIZES } from '../reader'
 import { speechSegments } from '../speech'
 import { loadNumber, saveNumber } from '../storage'
-import { ReadAloud } from './ReadAloud'
+import { ReadAloud, type ReadAloudControl } from './ReadAloud'
 import { ReaderToolbar, type View } from './ReaderToolbar'
 import { Timestamp } from './Timestamp'
 
@@ -29,6 +29,43 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
   const { time, pause } = usePlayer()
   const [view, setView] = useState<View>('summary')
   const [reading, setReading] = useState<string | null>(null)
+  // The segment the user picked (click a point or the TL;DR). Tied to this
+  // summary, so a new result starts with nothing selected.
+  const [picked, setPicked] = useState<{ summary: Summary; id: string } | null>(null)
+  const selected = picked?.summary === summary ? picked.id : null
+  const narrator = useRef<ReadAloudControl | null>(null)
+
+  /** Click on a segment: jump reading there if it's running, else select it
+   * (clicking the selected one again clears it). Links and text selection win. */
+  function pick(id: string, e: MouseEvent | KeyboardEvent) {
+    if ((e.target as HTMLElement).closest('a, button')) return
+    if (window.getSelection()?.toString()) return
+    if (narrator.current?.isActive()) {
+      narrator.current.jumpTo(id)
+      setPicked({ summary, id })
+    } else {
+      setPicked(selected === id ? null : { summary, id })
+    }
+  }
+
+  /** Props that make a segment selectable (click or Enter/Space). */
+  const selectable = (id: string) => ({
+    role: 'button' as const,
+    tabIndex: 0,
+    'aria-pressed': selected === id,
+    title: 'Click to read aloud from here',
+    onClick: (e: MouseEvent) => pick(id, e),
+    onKeyDown: (e: KeyboardEvent) => {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+        e.preventDefault()
+        pick(id, e)
+      }
+    },
+  })
+  // Show the selection only while nothing is being read; during reading the
+  // reading highlight already shows where you are.
+  const showSelected = (id: string) => selected === id && reading === null
+  const selectedRing = (id: string) => (showSelected(id) ? 'ring-1 ring-accent/60 bg-accent/[0.04]' : '')
   const [sizeIndex, setSizeIndex] = useState(() => {
     const saved = loadNumber('text-size')
     return saved !== null && saved >= 0 && saved < TEXT_SIZES.length ? saved : DEFAULT_SIZE
@@ -84,7 +121,17 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
         <ReaderToolbar
           view={view}
           onView={setView}
-          listen={<ReadAloud segments={segments} lang={lang} catalog={ttsCatalog} onActive={setReading} onStart={pause} />}
+          listen={
+            <ReadAloud
+              segments={segments}
+              lang={lang}
+              catalog={ttsCatalog}
+              onActive={setReading}
+              onStart={pause}
+              startAt={selected}
+              control={narrator}
+            />
+          }
           sizeIndex={sizeIndex}
           onSize={changeSize}
           allCollapsed={allCollapsed}
@@ -113,8 +160,10 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
             )}
             <blockquote
               id="read-tldr"
-              className={`-mx-3 rounded-r-md border-l-2 border-accent px-3 py-1 font-reading text-[1.08em] leading-[1.65] transition-colors ${wash(reading === 'tldr', true)}`}
+              {...selectable('tldr')}
+              className={`relative -mx-3 cursor-pointer rounded-r-md border-l-2 border-accent px-3 py-1 font-reading text-[1.08em] leading-[1.65] transition-colors hover:bg-foreground/[0.03] ${wash(reading === 'tldr', true)} ${selectedRing('tldr')}`}
             >
+              {showSelected('tldr') && <StartsHere />}
               <p className="mb-1 font-sans text-[0.7em] font-semibold tracking-[0.12em] text-accent uppercase">
                 {free ? 'Most representative moments' : 'In short'}
               </p>
@@ -149,8 +198,10 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
                           <li
                             key={j}
                             id={`read-s${i}p${j}`}
-                            className={`relative -mx-3 grid grid-cols-[3.6em_1fr] gap-x-2 rounded-md px-3 py-1.5 transition-colors ${wash(isReading || isPlaying, isReading)}`}
+                            {...selectable(`s${i}p${j}`)}
+                            className={`relative -mx-3 grid cursor-pointer grid-cols-[3.6em_1fr] gap-x-2 rounded-md px-3 py-1.5 transition-colors hover:bg-foreground/[0.03] ${wash(isReading || isPlaying, isReading)} ${selectedRing(`s${i}p${j}`)}`}
                           >
+                            {showSelected(`s${i}p${j}`) && <StartsHere />}
                             {isPlaying && (
                               <span className="absolute top-1/2 -left-1 size-1.5 -translate-y-1/2 rounded-full bg-accent" aria-label="Now playing" />
                             )}
@@ -186,6 +237,15 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
         )}
       </article>
     </div>
+  )
+}
+
+/** Small tag on the selected segment: where Listen will start. */
+function StartsHere() {
+  return (
+    <span className="pointer-events-none absolute -top-2.5 right-2 rounded-full border border-accent/40 bg-background px-2 py-px font-sans text-[10px] font-medium tracking-wide text-accent uppercase">
+      ▶ Listen starts here
+    </span>
   )
 }
 

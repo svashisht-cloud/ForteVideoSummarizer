@@ -41,14 +41,20 @@ Free results have a **Get AI summary →** button that switches to AI mode with 
 
 macOS (Apple Silicon recommended) and Linux both work. Local speech-to-text (`STT_ENGINE=local`) needs Apple Silicon; elsewhere use `STT_ENGINE=openai`.
 
-### 2. Clone
+### 2. Clone and run (one command)
 
 ```bash
-git clone git@github.com:svashisht-cloud/ForteVideoSummarizer.git
-cd ForteVideoSummarizer
+git clone https://github.com/svashisht-cloud/ForteVideoSummarizer.git && cd ForteVideoSummarizer && ./start.sh
 ```
 
-### 3. Start the backend
+`start.sh` checks the requirements, creates `backend/.env` from `.env.example` on the first run, installs the Python and Node dependencies (only when needed), then starts the backend and frontend together and opens http://localhost:5173. Output from each is prefixed `[api]` / `[web]`. **Ctrl-C stops both.** Next time, just run `./start.sh`. Set `NO_OPEN=1` to skip opening the browser.
+
+API keys are optional: add them to `backend/.env`, or enter your own in the app.
+
+<details>
+<summary>Or run the two servers by hand</summary>
+
+#### Backend
 
 ```bash
 cd backend
@@ -59,7 +65,7 @@ uv run --env-file .env uvicorn app.api.main:app --reload
 
 The API runs at http://localhost:8000 (interactive docs at http://localhost:8000/docs).
 
-### 4. Start the frontend (in a second terminal)
+#### Frontend (in a second terminal)
 
 ```bash
 cd frontend
@@ -67,7 +73,9 @@ npm install
 npm run dev
 ```
 
-### 5. Use it
+</details>
+
+### 3. Use it
 
 Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`: the backend only accepts requests from that address.
 

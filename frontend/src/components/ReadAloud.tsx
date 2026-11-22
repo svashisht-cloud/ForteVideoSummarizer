@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type RefObject } from 'react'
 import { fetchSpeech, type TtsCatalog } from '../api'
 import { prefetchIndices, previewText, ttsVoiceFor } from '../narrator'
-import { pickVoice, type SpeechSegment } from '../speech'
+import { pickVoice, startIndex, type SpeechSegment } from '../speech'
 import { loadVoice, saveVoice } from '../storage'
 
 const RATES = [0.75, 1, 1.25, 1.5] as const
@@ -25,6 +25,14 @@ function useDeviceVoices(): SpeechSynthesisVoice[] {
   return voices
 }
 
+/** Lets the reader jump reading to a segment the user clicks. */
+export interface ReadAloudControl {
+  /** Is reading playing, paused or loading (not stopped)? */
+  isActive: () => boolean
+  /** Continue reading from this segment (also resumes if paused). */
+  jumpTo: (id: string) => void
+}
+
 interface Props {
   segments: SpeechSegment[]
   /** Language of the summary text, e.g. "hi". */
@@ -35,6 +43,9 @@ interface Props {
   onActive: (id: string | null) => void
   /** Called when reading starts from the beginning (e.g. to pause the video). */
   onStart?: () => void
+  /** The segment the user selected: pressing Listen starts there. */
+  startAt?: string | null
+  control?: RefObject<ReadAloudControl | null>
 }
 
 /**
@@ -42,7 +53,7 @@ interface Props {
  * language has one, one clip per segment with the next ones prefetched; falls
  * back to the browser's built-in voice for other languages or if the server fails.
  */
-export function ReadAloud({ segments, lang, catalog, onActive, onStart }: Props) {
+export function ReadAloud({ segments, lang, catalog, onActive, onStart, startAt = null, control }: Props) {
   const deviceVoice = pickVoice(useDeviceVoices(), lang)
   // Voices picked this session (else the one saved on this device), per language.
   const [picked, setPicked] = useState<Record<string, string>>({})
@@ -101,6 +112,7 @@ export function ReadAloud({ segments, lang, catalog, onActive, onStart }: Props)
       if (!s || !deviceVoice) return finish()
       const id = ++run.current
       s.cancel()
+      s.resume() // Chrome stays paused across cancel(); new utterances wouldn't play
       const next = (k: number) => {
         if (run.current !== id) return
         if (k >= segments.length) return finish()
@@ -185,6 +197,21 @@ export function ReadAloud({ segments, lang, catalog, onActive, onStart }: Props)
   // Stop when the summary or language changes, or the component goes away.
   useEffect(() => stop, [segments, lang, stop])
 
+  useImperativeHandle(
+    control,
+    () => ({
+      isActive: () => state !== 'idle',
+      jumpTo: (id: string) => {
+        const i = segments.findIndex((s) => s.id === id)
+        if (i < 0 || state === 'idle') return
+        paused.current = false
+        if (engine === 'natural' && naturalVoice) speakNatural(i, naturalVoice, rate)
+        else speakDevice(i, rate)
+      },
+    }),
+    [state, segments, engine, naturalVoice, rate, speakNatural, speakDevice],
+  )
+
   if (!engine) {
     return (
       <span className="text-xs text-dim" title={`No ${lang} voice is available`}>
@@ -214,8 +241,9 @@ export function ReadAloud({ segments, lang, catalog, onActive, onStart }: Props)
     } else {
       onStart?.()
       paused.current = false
-      if (engine === 'natural' && naturalVoice) speakNatural(0, naturalVoice, rate)
-      else speakDevice(0, rate)
+      const from = startIndex(segments, startAt)
+      if (engine === 'natural' && naturalVoice) speakNatural(from, naturalVoice, rate)
+      else speakDevice(from, rate)
     }
   }
 
@@ -258,7 +286,7 @@ export function ReadAloud({ segments, lang, catalog, onActive, onStart }: Props)
     <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Read aloud">
       <button type="button" onClick={playPause} className={btn}>
         {state === 'loading' ? <Spinner /> : state === 'playing' ? <PauseIcon /> : <PlayIcon />}
-        {state === 'idle' ? 'Listen' : state === 'loading' ? 'Preparing…' : state === 'playing' ? 'Pause' : 'Resume'}
+        {state === 'idle' ? (startAt ? 'Listen from here' : 'Listen') : state === 'loading' ? 'Preparing…' : state === 'playing' ? 'Pause' : 'Resume'}
       </button>
       {state !== 'idle' && (
         <>

@@ -22,6 +22,12 @@ export function speechSegments(summary: Summary): SpeechSegment[] {
   return out
 }
 
+/** Where read-aloud starts: the selected segment, else the beginning. */
+export function startIndex(segments: SpeechSegment[], id: string | null): number {
+  const i = id ? segments.findIndex((s) => s.id === id) : -1
+  return i >= 0 ? i : 0
+}
+
 const base = (tag: string) => tag.toLowerCase().replace('_', '-').split('-')[0]
 
 /** Best installed voice for a language ("hi", "en-GB"), or null if none speaks it. */
