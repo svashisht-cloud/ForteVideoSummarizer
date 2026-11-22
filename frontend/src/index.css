@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/*
+ * Forte video summarizer theme. Follows the system setting:
+ *  - light "Paper": Forte paper/ink, serif reading font
+ *  - dark "Calm charcoal": Forte charcoal with softened contrast
+ * Accent is Forte's periwinkle (resume-builder "Charcoal & Periwinkle"), used
+ * only for interactive things: links, timestamps, active states.
+ */
+:root {
+  color-scheme: light;
+  --background: #f7f6f3; /* Forte paper */
+  --sidebar: #efede8;
+  --surface: #fbfaf8;
+  --foreground: #1f1f1f;
+  --muted: #6b6b6b;
+  --text-dim: #9a978f;
+  --border: #e3e0d8;
+  --accent: #5161d2;
+  --accent-hover: #3947b3;
+  --accent-foreground: #ffffff;
+  --danger: #b84545;
+  --danger-foreground: #9d3131;
+  --danger-bg: rgba(184, 69, 69, 0.08);
+  --danger-border: rgba(184, 69, 69, 0.22);
+  --font-reading-family: "Literata", Georgia, "Times New Roman", serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #161616;
+    --sidebar: #1a1a1a;
+    --surface: #202020;
+    --foreground: #e6e6e6;
+    --muted: #9a9a9a;
+    --text-dim: #6c6c6c;
+    --border: #2a2a2a;
+    --accent: #9aa8ff;
+    --accent-hover: #b5c0ff;
+    --accent-foreground: #161616;
+    --danger: #f06464;
+    --danger-foreground: #ffcfcf;
+    --danger-bg: rgba(240, 100, 100, 0.1);
+    --danger-border: rgba(240, 100, 100, 0.25);
+    --font-reading-family: "Inter", system-ui, -apple-system, sans-serif;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-dim: var(--text-dim);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-danger: var(--danger);
+  --color-danger-fg: var(--danger-foreground);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --font-brand: "Sora", "Inter", system-ui, sans-serif;
+  --font-reading: var(--font-reading-family);
+}
+
+@layer base {
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    @apply font-sans antialiased;
+  }
+
+  *:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}

@@ -1,0 +1,19 @@
+# Secrets: never commit. Example files are fine.
+.env
+.env.*
+!.env.example
+
+# Caches, models, generated files
+.cache/
+__pycache__/
+.pytest_cache/
+tts-sample.wav
+
+# Dependencies and builds
+.venv/
+node_modules/
+dist/
+*.local
+
+# OS / editors
+.DS_Store
