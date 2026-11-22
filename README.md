@@ -1,5 +1,7 @@
 # Forte video summarizer
 
+![Uploading Screenshot 2026-11-22 at 3.15.25 PM.png…]()
+
 Paste a YouTube link and get a summary you can **read, listen to and explore**: a short TL;DR plus timestamped sections, with the video right next to it. It runs on your own computer, works with **OpenAI or Claude**, and has a **free mode that needs no API key at all**.
 
 - **Studio layout:** your options and the video player on the left; a calm, distraction-free reading column on the right.
