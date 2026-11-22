@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getModels, getTtsVoices, type ModelsResponse, type TtsCatalog } from './api'
+import { getModels, getTtsVoices, type Mode, type ModelsResponse, type TtsCatalog } from './api'
 import { JobForm } from './components/JobForm'
 import { ReaderPane } from './components/ReaderPane'
 import { NowViewing, Outline, Wordmark } from './components/Sidebar'
 import { EmptyState, ErrorBox, Progress } from './components/Status'
 import { PlayerProvider } from './player'
+import { loadMode, saveMode } from './storage'
 import { useJob } from './useJob'
 
-type Request = [url: string, lang: string, model: string | null, apiKey: string | null]
+type Request = [url: string, lang: string, model: string | null, apiKey: string | null, mode: Mode]
 
 export default function App() {
   const { job, error, running, start } = useJob()
   const [models, setModels] = useState<ModelsResponse | null>(null)
   const [ttsCatalog, setTtsCatalog] = useState<TtsCatalog | null>(null)
   const [request, setRequest] = useState<Request | null>(null)
+  const [mode, setMode] = useState<Mode>(loadMode)
   const [editing, setEditing] = useState(false)
   const [formKey, setFormKey] = useState(0) // bump to reset the form ("New summary")
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
@@ -38,6 +40,17 @@ export default function App() {
     setCollapsed(new Set())
     setActiveSection(null)
     void start(...req)
+  }
+
+  function changeMode(m: Mode) {
+    setMode(m)
+    saveMode(m)
+  }
+
+  /** From a free result: switch to AI and show the options (URL kept) to run it. */
+  function upgradeToAi() {
+    changeMode('ai')
+    setEditing(true)
   }
 
   const collapse = useCallback((sections: number[], shut: boolean) => {
@@ -74,6 +87,7 @@ export default function App() {
                 result={result}
                 lang={request[1]}
                 model={request[2]}
+                mode={result.mode}
                 models={models}
                 editing={editing}
                 onEdit={() => setEditing((e) => !e)}
@@ -84,7 +98,14 @@ export default function App() {
               />
             )}
             <div className={showForm ? '' : 'hidden'}>
-              <JobForm key={formKey} running={running} models={models} onSubmit={submit} />
+              <JobForm
+                key={formKey}
+                running={running}
+                models={models}
+                mode={mode}
+                onModeChange={changeMode}
+                onSubmit={submit}
+              />
             </div>
             {result && !editing && (
               <div className="hidden lg:block">
@@ -108,8 +129,9 @@ export default function App() {
           {result && request && (
             <ReaderPane
               result={result}
-              lang={request[1]}
+              lang={result.mode === 'free' ? result.language.split('-')[0].toLowerCase() : request[1]}
               ttsCatalog={ttsCatalog}
+              onUpgrade={upgradeToAi}
               collapsed={collapsed}
               onCollapse={collapse}
               onSectionInView={setActiveSection}

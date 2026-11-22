@@ -10,6 +10,10 @@ class NoCaptions(PipelineError):
     """The video has no caption tracks. Speech-to-text fallback applies."""
 
 
+class CaptionsRequired(NoCaptions):
+    """No captions, and the caller asked for captions only (free mode: no speech-to-text)."""
+
+
 class YouTubeBlocked(PipelineError):
     """YouTube refused the request (bot detection / IP ban). Do not fall back."""
 

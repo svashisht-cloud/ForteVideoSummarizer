@@ -96,3 +96,12 @@ def test_model_name_is_made_filename_safe(tmp_path):
     cache.save_summary("vid", "en", SUMMARY, "org/model:v1", VERSION, cache_dir=tmp_path)
     assert [p.name for p in (tmp_path / "summaries").iterdir()] == ["vid.en.org_model_v1.json"]
     assert cache.load_summary("vid", "en", "org/model:v1", VERSION, cache_dir=tmp_path) == SUMMARY
+
+
+def test_metadata_round_trip(tmp_path):
+    from app.pipeline.models import Chapter, VideoMetadata
+
+    meta = VideoMetadata(title="T", language="en", chapters=[Chapter(title="A", start=0)])
+    assert cache.load_metadata("vid", cache_dir=tmp_path) is None
+    cache.save_metadata("vid", meta, cache_dir=tmp_path)
+    assert cache.load_metadata("vid", cache_dir=tmp_path) == meta

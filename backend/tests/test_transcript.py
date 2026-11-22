@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.pipeline import cache, transcript
-from app.pipeline.errors import NoCaptions, VideoUnavailable, YouTubeBlocked
+from app.pipeline.errors import CaptionsRequired, NoCaptions, VideoUnavailable, YouTubeBlocked
 from app.pipeline.models import Segment
 from app.pipeline.transcript import get_transcript
 
@@ -70,6 +70,20 @@ def test_captions_path(fakes, cache_dir):
     assert result == (CAPTION_SEGS, "en", "captions")
     assert stages == ["fetching_captions"]
     assert fakes.calls == ["captions"]
+
+
+def test_captions_only_never_runs_stt(fakes, cache_dir):
+    fakes.captions_error = NoCaptions("none")
+    with pytest.raises(CaptionsRequired):
+        run(cache_dir, allow_stt=False)
+    assert fakes.calls == ["captions"]
+
+
+def test_captions_only_still_uses_a_cached_stt_transcript(fakes, cache_dir):
+    cache.save_transcript(VID, STT_SEGS, "de", "stt-local", cache_dir=cache_dir)
+    result, _ = run(cache_dir, allow_stt=False)
+    assert result == (STT_SEGS, "de", "stt-local")
+    assert fakes.calls == []
 
 
 def test_no_captions_falls_back_to_stt(fakes, cache_dir):

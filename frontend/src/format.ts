@@ -1,4 +1,4 @@
-import type { ModelOption, Progress, Stage, Usage } from './api'
+import type { ModelOption, Progress, Stage, SummaryMethod, Usage } from './api'
 
 /** Seconds -> "m:ss", or "h:mm:ss" from one hour up (same as the backend's format_ts). */
 export function formatTs(seconds: number): string {
@@ -80,7 +80,8 @@ function usageDetails(u: Usage): string {
 }
 
 /** The cost line under a summary. `cached`: this request reused a cached summary. */
-export function costText(usage: Usage | null, cached: boolean): string {
+export function costText(usage: Usage | null, cached: boolean, method: SummaryMethod = 'ai'): string {
+  if (method === 'extractive') return 'Free: no AI used. Key moments are quoted from the captions.'
   if (!usage) {
     return cached ? "From cache, no new LLM cost. The original cost wasn't recorded." : 'LLM cost not available.'
   }

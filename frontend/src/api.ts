@@ -1,6 +1,9 @@
 // Types mirror backend/app/api/main.py.
 
 export type Status = 'queued' | 'running' | 'done' | 'error'
+/** 'free': no AI, key moments from the captions. 'ai': LLM summary. */
+export type Mode = 'free' | 'ai'
+export type SummaryMethod = 'ai' | 'extractive'
 export type Stage = 'fetching_captions' | 'downloading_audio' | 'transcribing' | 'summarizing' | 'merging'
 
 export interface Progress {
@@ -32,7 +35,8 @@ export interface Usage {
 export interface Summary {
   tldr: string
   sections: Section[]
-  usage: Usage | null // null for summaries cached before usage was tracked
+  usage: Usage | null // null for free summaries and ones cached before usage was tracked
+  method: SummaryMethod
 }
 
 export interface Block {
@@ -48,6 +52,8 @@ export interface JobResult {
   language: string
   source: string
   summary_cached: boolean // true: no LLM calls were made for this request
+  mode: Mode
+  title: string | null // video title, when known
 }
 
 export interface Job {
@@ -143,13 +149,14 @@ export function createJob(
   lang: string,
   model: string | null,
   apiKey: string | null,
+  mode: Mode,
 ): Promise<{ job_id: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (apiKey) headers['X-OpenAI-Key'] = apiKey
+  if (apiKey && mode === 'ai') headers['X-OpenAI-Key'] = apiKey
   return request('/jobs', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ url, lang, model }),
+    body: JSON.stringify({ url, lang, model, mode }),
   })
 }
 

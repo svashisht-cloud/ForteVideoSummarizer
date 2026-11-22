@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import type { ModelsResponse } from '../api'
+import type { Mode, ModelsResponse } from '../api'
 import { modelPrice } from '../format'
 import { LANGUAGES } from '../languages'
 import { loadApiKey, loadModel, saveApiKey, saveModel } from '../storage'
@@ -12,11 +12,19 @@ const LABEL = 'mb-1.5 block text-xs font-medium tracking-wide text-muted upperca
 interface Props {
   running: boolean
   models: ModelsResponse | null
-  onSubmit: (url: string, lang: string, model: string | null, apiKey: string | null) => void
+  /** Free (no AI) or AI summary; owned by App so a result can switch it. */
+  mode: Mode
+  onModeChange: (mode: Mode) => void
+  onSubmit: (url: string, lang: string, model: string | null, apiKey: string | null, mode: Mode) => void
 }
 
+const MODES: [Mode, string][] = [
+  ['free', 'Free'],
+  ['ai', 'AI summary'],
+]
+
 /** The options form in the sidebar. Stays mounted (hidden) after a run so its values persist. */
-export function JobForm({ running, models, onSubmit }: Props) {
+export function JobForm({ running, models, mode, onModeChange, onSubmit }: Props) {
   const [url, setUrl] = useState('')
   const [lang, setLang] = useState('en')
   const [pickedModel, setPickedModel] = useState<string | null>(loadModel)
@@ -28,7 +36,7 @@ export function JobForm({ running, models, onSubmit }: Props) {
     pickedModel && offered.some((m) => m.id === pickedModel) ? pickedModel : (models?.default ?? offered[0]?.id ?? null)
   const selected = offered.find((m) => m.id === model)
   const keyRequired = models?.require_user_key ?? false
-  const canSubmit = !running && url.trim() !== '' && (!keyRequired || key.trim() !== '')
+  const canSubmit = !running && url.trim() !== '' && (mode === 'free' || !keyRequired || key.trim() !== '')
 
   function changeModel(id: string) {
     setPickedModel(id)
@@ -42,11 +50,35 @@ export function JobForm({ running, models, onSubmit }: Props) {
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    if (canSubmit) onSubmit(url.trim(), lang, model, key.trim() || null)
+    if (canSubmit) onSubmit(url.trim(), lang, model, key.trim() || null, mode)
   }
 
   return (
     <form onSubmit={submit} className="space-y-5">
+      <div>
+        <div role="radiogroup" aria-label="Summary type" className="grid grid-cols-2 rounded-lg bg-foreground/5 p-0.5 text-sm">
+          {MODES.map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={mode === m}
+              onClick={() => onModeChange(m)}
+              className={`rounded-md py-1.5 font-medium transition-colors ${
+                mode === m ? 'bg-background text-foreground shadow-sm' : 'text-muted hover:text-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-muted">
+          {mode === 'free'
+            ? 'No AI, no cost. Key moments are quoted from the video’s captions, in its original language.'
+            : 'Written by an AI model in the language you choose. Uses OpenAI (your key or the server’s).'}
+        </p>
+      </div>
+
       <label className="block">
         <span className={LABEL}>YouTube link</span>
         <input
@@ -60,6 +92,8 @@ export function JobForm({ running, models, onSubmit }: Props) {
         />
       </label>
 
+      {mode === 'ai' && (
+        <>
       <label className="block">
         <span className={LABEL}>Summary language</span>
         <select value={lang} onChange={(e) => setLang(e.target.value)} className={FIELD}>
@@ -86,13 +120,15 @@ export function JobForm({ running, models, onSubmit }: Props) {
       )}
 
       <ApiKeyField apiKey={key} remember={remember} required={keyRequired} onChange={changeKey} />
+        </>
+      )}
 
       <button
         type="submit"
         disabled={!canSubmit}
         className="w-full rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-foreground transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {running ? 'Summarizing…' : 'Summarize'}
+        {running ? 'Summarizing…' : mode === 'free' ? 'Get key moments' : 'Summarize'}
       </button>
     </form>
   )

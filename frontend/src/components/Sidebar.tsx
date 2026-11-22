@@ -1,4 +1,4 @@
-import type { JobResult, ModelsResponse } from '../api'
+import type { JobResult, Mode, ModelsResponse } from '../api'
 import { formatTs, formatUsd } from '../format'
 import { languageName } from '../languages'
 import { Player } from '../player'
@@ -22,13 +22,14 @@ interface NowViewingProps {
   lang: string
   model: string | null
   models: ModelsResponse | null
+  mode: Mode
   editing: boolean
   onEdit: () => void
   onNew: () => void
 }
 
 /** The video being read, with what produced the summary. */
-export function NowViewing({ result, lang, model, models, editing, onEdit, onNew }: NowViewingProps) {
+export function NowViewing({ result, lang, model, models, mode, editing, onEdit, onNew }: NowViewingProps) {
   const usedModel = result.summary.usage?.model ?? model
   const modelLabel = models?.models.find((m) => m.id === usedModel)?.label ?? usedModel
   const usage = result.summary.usage
@@ -37,12 +38,20 @@ export function NowViewing({ result, lang, model, models, editing, onEdit, onNew
     : usage?.cost_usd != null
       ? formatUsd(usage.cost_usd)
       : null
-  const meta = [languageName(lang), modelLabel, cost].filter(Boolean).join(' · ')
+  const meta =
+    mode === 'free'
+      ? ['Free · no AI', languageName(result.language.split('-')[0].toLowerCase())].join(' · ')
+      : [languageName(lang), modelLabel, cost].filter(Boolean).join(' · ')
   const btn = 'rounded-md px-2.5 py-1 text-sm font-medium text-muted hover:bg-foreground/5 hover:text-foreground'
 
   return (
     <div className="space-y-3">
       <Player videoId={result.video_id} />
+      {result.title && (
+        <p dir="auto" className="line-clamp-2 text-sm leading-snug font-medium">
+          {result.title}
+        </p>
+      )}
       <p className="text-xs text-muted">{meta}</p>
       <div className="-ml-2.5 flex gap-1">
         <button type="button" className={btn} onClick={onEdit} aria-expanded={editing}>

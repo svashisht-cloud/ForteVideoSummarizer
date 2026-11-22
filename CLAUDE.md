@@ -38,6 +38,12 @@ URL → video ID → transcript segments → normalize (~30s blocks) → chunk (
 - Users may send their own OpenAI key in the `X-OpenAI-Key` header. It is used only to build that job's OpenAI clients (summaries and OpenAI speech-to-text) and is never stored, logged, cached, or returned. Without a header the server's `OPENAI_API_KEY` is used, unless `REQUIRE_USER_KEY=true` (for deployment), which makes the key required for anything that isn't a full cache hit. Never put the key in a URL.
 - Structured outputs with Pydantic models. The LLM returns timestamps as the **exact `m:ss` string** from the `[m:ss]` markers it was given; code parses them to seconds and snaps each one to the nearest block start.
 
+**Free mode (no AI)**
+- `mode: "free"` on `POST /jobs`: captions only (`get_transcript(allow_stt=False)` raises `CaptionsRequired`), no LLM, no key, ignores `REQUIRE_USER_KEY`.
+- Key moments: TextRank over the normalized blocks (`extract.py`: TF-IDF + cosine graph + PageRank, char bigrams for zh/ja), quoted in the original language. Sections are the YouTube chapters (yt-dlp metadata, cached) when there are 2+, else windows of `duration/6` clamped to 1–5 min. Same `Summary` shape with `method="extractive"`.
+- Bump `EXTRACT_VERSION` whenever the algorithm or its settings change.
+- The UI defaults to Free on first visit; free results offer "Get AI summary".
+
 **Long videos: map-reduce**
 - Chunks of ~12 minutes of normalized blocks, no overlap.
 - Map: one call per chunk → `ChunkPoints { points: [{ts, text}] }`. Run in parallel, max 4 concurrent.
@@ -46,7 +52,7 @@ URL → video ID → transcript segments → normalize (~30s blocks) → chunk (
 - Log a warning if any chunk returns zero points.
 
 **Storage**
-- Cache as JSON files in `backend/.cache/`: transcripts keyed by `video_id`, summaries by `(video_id, lang, model)` (file `{video_id}.{lang}.{model}.json`).
+- Cache as JSON files in `backend/.cache/`: transcripts keyed by `video_id`, summaries by `(video_id, lang, model)` (file `{video_id}.{lang}.{model}.json`; free ones are `{video_id}.orig.extractive.json`, versioned by `EXTRACT_VERSION`). Video metadata (title, language, chapters) in `metadata/{video_id}.json`.
 - Each cached summary records the model and `PROMPT_VERSION` (in `summarize.py`) that made it. A mismatch is a cache miss and the file is overwritten. Bump `PROMPT_VERSION` whenever prompts or post-processing change.
 
 **API (FastAPI)**
@@ -98,6 +104,7 @@ backend/
       transcript.py   # get_transcript: captions → fallback
       summarize.py    # map / merge LLM calls
       tts.py          # Kokoro text-to-speech, voice shortlist
+      extract.py      # free mode: TextRank key moments
       cache.py
       errors.py       # NoCaptions, YouTubeBlocked, VideoUnavailable, InvalidURL
     api/

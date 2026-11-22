@@ -1,13 +1,16 @@
 """HTTP API: start a summary job, poll its status.
 
 GET  /models                 -> {default, require_user_key, models: [...]}
-POST /jobs {url, lang, model?} (+ optional X-OpenAI-Key header) -> {job_id}
+POST /jobs {url, lang, model?, mode?} (+ optional X-OpenAI-Key header) -> {job_id}
 GET  /jobs/{id}              -> {status, stage, progress, result, error}
 GET  /tts/voices             -> {lang: {default, voices: [...]}} (languages with a natural voice)
 POST /tts {text, lang, voice?} -> audio/wav
 
 Jobs run as background tasks and live in memory. Blocking work (captions,
 yt-dlp, speech-to-text) runs in a worker thread so the server stays responsive.
+
+mode "ai" (default): LLM summary in `lang`. mode "free": no LLM, captions only;
+key moments are extracted from the captions in the video's own language.
 
 A user's own OpenAI key (X-OpenAI-Key) is used only to build OpenAI clients for
 that one job. It is passed to the background task as an argument and never put
@@ -26,10 +29,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.pipeline import cache, tts
-from app.pipeline.errors import InvalidURL, NoCaptions, PipelineError, VideoUnavailable, YouTubeBlocked
-from app.pipeline.models import Segment, Summary
+from app.pipeline.errors import (
+    CaptionsRequired,
+    InvalidURL,
+    NoCaptions,
+    PipelineError,
+    VideoUnavailable,
+    YouTubeBlocked,
+)
+from app.pipeline.extract import EXTRACT_VERSION, key_moments
+from app.pipeline.models import Segment, Summary, VideoMetadata
 from app.pipeline.normalize import normalize
 from app.pipeline.pricing import available_models, is_known_model
+from app.pipeline.stt import video_metadata
 from app.pipeline.summarize import PROMPT_VERSION, resolve_model, summarize
 from app.pipeline.transcript import get_transcript
 from app.pipeline.url import parse_video_id
@@ -44,7 +56,10 @@ FRONTEND_ORIGINS = ["http://localhost:5173"]
 
 Status = Literal["queued", "running", "done", "error"]
 Stage = Literal["fetching_captions", "downloading_audio", "transcribing", "summarizing", "merging"]
+Mode = Literal["free", "ai"]
 STT_STAGES = ("downloading_audio", "transcribing")
+# Cache slot for free summaries: not tied to a summary language or an LLM.
+FREE_LANG, FREE_MODEL = "orig", "extractive"
 
 
 def require_user_key() -> bool:
@@ -56,6 +71,7 @@ class JobRequest(BaseModel):
     url: str
     lang: str = Field(min_length=1)
     model: str | None = None  # None: the server default (OPENAI_MODEL)
+    mode: Mode = "ai"
 
 
 class JobCreated(BaseModel):
@@ -74,6 +90,8 @@ class JobResult(BaseModel):
     language: str
     source: str  # captions | stt-local | stt-openai
     summary_cached: bool  # True: the summary came from the cache, so this request made no LLM calls
+    mode: Mode = "ai"
+    title: str | None = None  # video title, when known (free mode looks it up)
 
 
 class JobStatus(BaseModel):
@@ -114,6 +132,8 @@ def error_message(exc: BaseException, stage: str | None) -> str:
         return "YouTube is blocking requests from this network. Try again later or from a different network."
     if isinstance(exc, VideoUnavailable):
         return f"This video is unavailable (private, removed, age-restricted, or members-only). {exc}"
+    if isinstance(exc, CaptionsRequired):
+        return "This video has no captions, and Free mode only uses captions. Switch to AI summary to transcribe it."
     if isinstance(exc, NoCaptions):
         return "This video has no captions and no speech could be transcribed from its audio."
     if isinstance(exc, PipelineError):
@@ -154,8 +174,15 @@ def _pick_model(requested: str | None) -> str:
 
 
 def _make_result(
-    video_id: str, segments: list[Segment], language: str, source: str, summary: Summary, summary_cached: bool
+    video_id: str,
+    segments: list[Segment],
+    language: str,
+    source: str,
+    summary: Summary,
+    summary_cached: bool,
+    mode: Mode = "ai",
 ) -> JobResult:
+    meta = cache.load_metadata(video_id, cache_dir=CACHE_DIR)  # local file only, never the network
     return JobResult(
         summary=summary,
         transcript=normalize(segments),
@@ -163,19 +190,69 @@ def _make_result(
         language=language,
         source=source,
         summary_cached=summary_cached,
+        mode=mode,
+        title=meta.title if meta else None,
     )
 
 
-def _cached_result(video_id: str, lang: str, model: str) -> JobResult | None:
+def _summary_slot(mode: Mode, lang: str, model: str) -> tuple[str, str, int]:
+    """(lang, model, version) the summary is cached under."""
+    return (FREE_LANG, FREE_MODEL, EXTRACT_VERSION) if mode == "free" else (lang, model, PROMPT_VERSION)
+
+
+def _cached_result(video_id: str, lang: str, model: str, mode: Mode = "ai") -> JobResult | None:
     """The full result if both the transcript and an up-to-date summary are cached."""
     transcript = cache.load_transcript(video_id, cache_dir=CACHE_DIR)
     if transcript is None:
         return None
-    summary = cache.load_summary(video_id, lang, model, PROMPT_VERSION, cache_dir=CACHE_DIR)
+    slot_lang, slot_model, version = _summary_slot(mode, lang, model)
+    summary = cache.load_summary(video_id, slot_lang, slot_model, version, cache_dir=CACHE_DIR)
     if summary is None:
         return None
     segments, language, source = transcript
-    return _make_result(video_id, segments, language, source, summary, summary_cached=True)
+    return _make_result(video_id, segments, language, source, summary, summary_cached=True, mode=mode)
+
+
+def _metadata(video_id: str) -> VideoMetadata:
+    """Title and chapters, cached. Best effort: on any failure there are just no chapters."""
+    meta = cache.load_metadata(video_id, cache_dir=CACHE_DIR)
+    if meta is not None:
+        return meta
+    try:
+        meta = video_metadata(video_id)
+    except Exception as e:
+        log.warning("no metadata for %s: %s: %s", video_id, type(e).__name__, e)
+        return VideoMetadata()
+    cache.save_metadata(video_id, meta, cache_dir=CACHE_DIR)
+    return meta
+
+
+async def run_free_job(job: JobStatus, video_id: str) -> None:
+    """Free mode: captions only, no LLM. Key moments are picked with TextRank (extract.py)."""
+    job.status = "running"
+
+    def on_stage(stage: str) -> None:
+        job.stage = stage
+
+    try:
+        segments, language, source = await asyncio.to_thread(
+            get_transcript, video_id, on_stage, cache_dir=CACHE_DIR, allow_stt=False
+        )
+        job.stage = "summarizing"
+        meta = await asyncio.to_thread(_metadata, video_id)
+        summary = key_moments(normalize(segments), language, meta.chapters)
+        await asyncio.to_thread(
+            cache.save_summary, video_id, FREE_LANG, summary, FREE_MODEL, EXTRACT_VERSION, cache_dir=CACHE_DIR
+        )
+        job.result = _make_result(video_id, segments, language, source, summary, summary_cached=False, mode="free")
+        job.status = "done"
+    except Exception as e:
+        if not isinstance(e, PipelineError):
+            log.exception("free job for %s failed unexpectedly", video_id)
+        else:
+            log.warning("free job for %s failed at %s: %s: %s", video_id, job.stage, type(e).__name__, e)
+        job.error = error_message(e, job.stage)
+        job.status = "error"
 
 
 async def run_job(job: JobStatus, video_id: str, lang: str, model: str, api_key: str | None = None) -> None:
@@ -249,6 +326,17 @@ async def create_job(
     lang = req.lang.strip()
     if not lang:
         raise HTTPException(status_code=400, detail="lang must not be empty")
+    job_id = uuid.uuid4().hex
+
+    if req.mode == "free":  # no model, no key, no LLM
+        cached = await asyncio.to_thread(_cached_result, video_id, lang, FREE_MODEL, "free")
+        job = JOBS[job_id] = JobStatus()
+        if cached is not None:
+            job.result, job.status = cached, "done"
+        else:
+            background_tasks.add_task(run_free_job, job, video_id)
+        return JobCreated(job_id=job_id)
+
     model = _pick_model(req.model)
     api_key = (x_openai_key or "").strip() or None
 
@@ -256,7 +344,6 @@ async def create_job(
     if cached is None and api_key is None and require_user_key():
         raise HTTPException(status_code=400, detail="This server needs your own OpenAI API key to summarize new videos.")
 
-    job_id = uuid.uuid4().hex
     job = JOBS[job_id] = JobStatus()
     if cached is not None:
         job.result = cached

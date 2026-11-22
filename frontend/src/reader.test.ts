@@ -18,6 +18,7 @@ const summary: Summary = {
     { title: 'Later', start: 61, end: 125, points: [{ t: 61, text: 'Third.' }] },
   ],
   usage: null,
+  method: 'ai',
 }
 
 describe('pointAtTime', () => {

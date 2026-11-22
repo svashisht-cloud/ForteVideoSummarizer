@@ -332,3 +332,23 @@ def test_video_language_maps_errors(ydl, msg, expected):
     ydl.error = stt.yt_dlp.utils.DownloadError(msg)
     with pytest.raises(expected):
         stt.video_language("dQw4w9WgXcQ")
+
+
+def test_video_metadata_reads_title_language_and_chapters(ydl):
+    ydl.info = {
+        "title": "How to never procrastinate",
+        "language": "en-US",
+        "chapters": [
+            {"title": "Intro", "start_time": 0.0, "end_time": 61.5},
+            {"title": "The loop", "start_time": 61.5, "end_time": None},
+            {"title": "broken"},  # no start: skipped
+        ],
+    }
+    meta = stt.video_metadata("dQw4w9WgXcQ")
+    assert (meta.title, meta.language) == ("How to never procrastinate", "en-US")
+    assert [(c.title, c.start, c.end) for c in meta.chapters] == [("Intro", 0.0, 61.5), ("The loop", 61.5, None)]
+
+
+def test_video_metadata_without_chapters(ydl):
+    ydl.info = {"title": "x"}
+    assert stt.video_metadata("dQw4w9WgXcQ").chapters == []

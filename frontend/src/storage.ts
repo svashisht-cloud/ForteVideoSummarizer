@@ -46,6 +46,15 @@ export function saveModel(model: string): void {
   set(local, MODEL_NAME, model)
 }
 
+/** Free or AI mode, as last chosen. Free the first time. */
+export function loadMode(): 'free' | 'ai' {
+  return get(local, 'mode') === 'ai' ? 'ai' : 'free'
+}
+
+export function saveMode(mode: 'free' | 'ai'): void {
+  set(local, 'mode', mode)
+}
+
 /** The read-aloud voice picked for a summary language. */
 export function loadVoice(lang: string): string | null {
   return get(local, `voice.${lang}`)

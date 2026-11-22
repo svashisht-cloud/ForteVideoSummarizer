@@ -9,6 +9,7 @@ const summary: Summary = {
     { title: 'Middle', start: 60, end: 120, points: [{ t: 60, text: 'Second point.' }] },
   ],
   usage: null,
+  method: 'ai',
 }
 
 describe('speechSegments', () => {

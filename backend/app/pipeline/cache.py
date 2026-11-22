@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from app.pipeline.models import Segment, Summary
+from app.pipeline.models import Segment, Summary, VideoMetadata
 
 log = logging.getLogger(__name__)
 
@@ -124,3 +124,16 @@ def load_audio(key: str, cache_dir: Path = CACHE_DIR) -> bytes | None:
 
 def save_audio(key: str, data: bytes, cache_dir: Path = CACHE_DIR) -> None:
     _write(_audio_path(key, cache_dir), data)
+
+
+def _metadata_path(video_id: str, cache_dir: Path) -> Path:
+    return cache_dir / "metadata" / f"{_safe(video_id)}.json"
+
+
+def load_metadata(video_id: str, cache_dir: Path = CACHE_DIR) -> VideoMetadata | None:
+    """Cached title / language / chapters for a video, or None."""
+    return _read(_metadata_path(video_id, cache_dir), VideoMetadata)
+
+
+def save_metadata(video_id: str, meta: VideoMetadata, cache_dir: Path = CACHE_DIR) -> None:
+    _write(_metadata_path(video_id, cache_dir), meta.model_dump_json())

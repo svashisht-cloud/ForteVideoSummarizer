@@ -109,3 +109,11 @@ describe('maskKey', () => {
   it('shows only the prefix and last 4 characters', () => expect(maskKey('sk-proj-abcdefghijklmnopwxyz')).toBe('sk-…wxyz'))
   it('hides short keys entirely', () => expect(maskKey('abc')).toBe('…'))
 })
+
+describe('costText for free summaries', () => {
+  it('says no AI was used, cached or not', () => {
+    expect(costText(null, false, 'extractive')).toBe('Free: no AI used. Key moments are quoted from the captions.')
+    expect(costText(null, true, 'extractive')).toBe('Free: no AI used. Key moments are quoted from the captions.')
+  })
+  it('defaults to the AI wording', () => expect(costText(null, true)).toBe("From cache, no new LLM cost. The original cost wasn't recorded."))
+})

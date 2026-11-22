@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createJob, getJob, type Job } from './api'
+import { createJob, getJob, type Job, type Mode } from './api'
 
 const POLL_MS = 1000
 
@@ -18,14 +18,14 @@ export function useJob() {
     [],
   )
 
-  const start = useCallback(async (url: string, lang: string, model: string | null, apiKey: string | null) => {
+  const start = useCallback(async (url: string, lang: string, model: string | null, apiKey: string | null, mode: Mode) => {
     const id = ++run.current
     const current = () => run.current === id
     setJob(null)
     setError(null)
     setRunning(true)
     try {
-      const { job_id } = await createJob(url, lang, model, apiKey)
+      const { job_id } = await createJob(url, lang, model, apiKey, mode)
       while (current()) {
         const j = await getJob(job_id)
         if (!current()) return

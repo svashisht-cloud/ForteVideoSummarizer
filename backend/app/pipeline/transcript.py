@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.pipeline import cache
 from app.pipeline.captions import fetch_captions
-from app.pipeline.errors import NoCaptions
+from app.pipeline.errors import CaptionsRequired, NoCaptions
 from app.pipeline.models import Segment
 from app.pipeline.stt import download_audio, engine_name, transcribe
 
@@ -25,6 +25,7 @@ def get_transcript(
     use_cache: bool = True,
     cache_dir: Path = cache.CACHE_DIR,
     openai_client=None,
+    allow_stt: bool = True,
 ) -> tuple[list[Segment], str, str]:
     """Return (segments, language, source); source is captions | stt-local | stt-openai.
     openai_client is used for OpenAI speech-to-text (STT_ENGINE=openai)."""
@@ -38,7 +39,9 @@ def get_transcript(
     try:
         segments, language = fetch_captions(video_id)
         source = "captions"
-    except NoCaptions:
+    except NoCaptions as e:
+        if not allow_stt:
+            raise CaptionsRequired(f"video {video_id} has no captions") from e
         source = f"stt-{engine_name()}"
         stage("downloading_audio")
         audio = download_audio(video_id)

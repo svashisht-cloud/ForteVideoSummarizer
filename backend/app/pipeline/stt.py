@@ -16,7 +16,7 @@ import openai
 import yt_dlp
 
 from app.pipeline.errors import PipelineError, VideoUnavailable, YouTubeBlocked, openai_error_message
-from app.pipeline.models import Segment
+from app.pipeline.models import Chapter, Segment, VideoMetadata
 
 log = logging.getLogger(__name__)
 
@@ -141,17 +141,38 @@ def map_ytdlp_error(video_id: str, msg: str) -> PipelineError:
 # --- Metadata ------------------------------------------------------------------------
 
 
-def video_language(video_id: str) -> str | None:
-    """The video's original spoken language from YouTube metadata (e.g. "en-US"),
-    or None if YouTube doesn't say. Fetches metadata only, no download."""
+def video_metadata(video_id: str) -> VideoMetadata:
+    """Title, original spoken language and YouTube chapters, from one yt-dlp
+    metadata request (no download)."""
     opts = {"skip_download": True, "noplaylist": True, "quiet": True, "no_warnings": True}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
     except yt_dlp.utils.DownloadError as e:
         raise map_ytdlp_error(video_id, str(e)) from e
-    language = (info or {}).get("language")
-    return language if isinstance(language, str) and language.strip() else None
+    info = info or {}
+    language = info.get("language")
+    title = info.get("title")
+    chapters = [
+        Chapter(
+            title=str(c.get("title") or ""),
+            start=float(c["start_time"]),
+            end=float(c["end_time"]) if c.get("end_time") is not None else None,
+        )
+        for c in info.get("chapters") or []
+        if c.get("start_time") is not None
+    ]
+    return VideoMetadata(
+        title=title if isinstance(title, str) and title.strip() else None,
+        language=language if isinstance(language, str) and language.strip() else None,
+        chapters=chapters,
+    )
+
+
+def video_language(video_id: str) -> str | None:
+    """The video's original spoken language from YouTube metadata (e.g. "en-US"),
+    or None if YouTube doesn't say."""
+    return video_metadata(video_id).language
 
 
 # --- Download ------------------------------------------------------------------------

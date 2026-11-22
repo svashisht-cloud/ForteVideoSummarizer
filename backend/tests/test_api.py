@@ -355,3 +355,82 @@ def test_tts_engine_failure_is_503(client, monkeypatch):
 
     monkeypatch.setattr(main.tts, "synthesize", fake)
     assert client.post("/tts", json={"text": "Hi", "lang": "en"}).status_code == 503
+
+
+# --- free mode (no AI) ----------------------------------------------------------------
+
+
+@pytest.fixture
+def meta(monkeypatch):
+    """Fakes the yt-dlp metadata lookup."""
+    from app.pipeline.models import Chapter, VideoMetadata
+
+    calls = []
+
+    def fake(video_id):
+        calls.append(video_id)
+        if isinstance(fake.result, Exception):
+            raise fake.result
+        return fake.result
+
+    fake.result = VideoMetadata(title="A video", language="en", chapters=[Chapter(title="Only", start=0)])
+    monkeypatch.setattr(main, "video_metadata", fake)
+    fake.calls = calls
+    return fake
+
+
+def start_free(client, **extra):
+    r = client.post("/jobs", json={"url": URL, "lang": "en", "mode": "free", **extra})
+    assert r.status_code == 200, r.text
+    return get(client, r.json()["job_id"])
+
+
+def test_free_mode_makes_no_llm_call(fakes, client, meta):
+    job = start_free(client)
+    assert job["status"] == "done", job["error"]
+    result = job["result"]
+    assert result["mode"] == "free"
+    assert result["title"] == "A video"
+    assert result["summary"]["method"] == "extractive"
+    assert result["summary"]["usage"] is None
+    assert result["summary"]["sections"] and result["summary"]["tldr"]
+    assert result["summary_cached"] is False
+    assert fakes.calls == ["transcript"]  # no summarize
+    assert fakes.transcript_kwargs["allow_stt"] is False
+
+
+def test_free_mode_is_cached_with_metadata(fakes, client, meta, tmp_path):
+    cache.save_transcript(VID, SEGMENTS, "en", "captions", cache_dir=tmp_path)
+    first = start_free(client)
+    assert first["result"]["summary_cached"] is False
+    second = start_free(client)
+    assert second["status"] == "done"
+    assert second["result"]["summary_cached"] is True
+    assert second["result"]["title"] == "A video"
+    assert meta.calls == [VID]  # metadata fetched once, then read from the cache
+
+
+def test_free_mode_ignores_model_and_required_key(fakes, client, meta, monkeypatch):
+    monkeypatch.setenv("REQUIRE_USER_KEY", "true")
+    job = start_free(client, model="not-a-model")
+    assert job["status"] == "done"
+
+
+def test_free_mode_metadata_failure_is_not_fatal(fakes, client, meta):
+    meta.result = YouTubeBlocked("blocked")
+    job = start_free(client)
+    assert job["status"] == "done"
+    assert job["result"]["title"] is None
+
+
+def test_free_mode_needs_captions(fakes, client, meta):
+    from app.pipeline.errors import CaptionsRequired
+
+    fakes.transcript_error = CaptionsRequired("video has no captions")
+    job = start_free(client)
+    assert job["status"] == "error"
+    assert "Free mode only uses captions" in job["error"]
+
+
+def test_ai_mode_result_reports_its_mode(fakes, client):
+    assert get(client, start(client))["result"]["mode"] == "ai"

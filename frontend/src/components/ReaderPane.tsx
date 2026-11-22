@@ -18,11 +18,13 @@ interface Props {
   onCollapse: (sections: number[], collapse: boolean) => void
   /** Reports the section scrolled into view (for the outline). */
   onSectionInView: (i: number) => void
+  /** Free results: switch to AI mode to get a written summary. */
+  onUpgrade: () => void
 }
 
 const DEFAULT_SIZE = 2
 
-export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, onSectionInView }: Props) {
+export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, onSectionInView, onUpgrade }: Props) {
   const { video_id: videoId, summary, transcript } = result
   const { time, pause } = usePlayer()
   const [view, setView] = useState<View>('summary')
@@ -33,6 +35,7 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
   })
   const segments = useMemo(() => speechSegments(summary), [summary])
   const playing = time === null ? null : pointAtTime(summary, time)
+  const free = summary.method === 'extractive'
   const allCollapsed = summary.sections.length > 0 && collapsed.size === summary.sections.length
 
   function changeSize(i: number) {
@@ -93,12 +96,27 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
       <article className="mx-auto max-w-[68ch] px-5 pt-10 pb-24 sm:px-8" style={{ fontSize: TEXT_SIZES[sizeIndex] }}>
         {view === 'summary' ? (
           <>
+            {free && (
+              <div className="mb-8 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-border bg-surface px-4 py-3 font-sans text-sm">
+                <p className="flex-1 text-muted">
+                  <span className="font-medium text-foreground">Free summary</span> · key moments picked from the
+                  captions without AI, in the video’s own words.
+                </p>
+                <button
+                  type="button"
+                  onClick={onUpgrade}
+                  className="font-medium whitespace-nowrap text-accent hover:text-accent-hover"
+                >
+                  Get AI summary →
+                </button>
+              </div>
+            )}
             <blockquote
               id="read-tldr"
               className={`-mx-3 rounded-r-md border-l-2 border-accent px-3 py-1 font-reading text-[1.08em] leading-[1.65] transition-colors ${wash(reading === 'tldr', true)}`}
             >
               <p className="mb-1 font-sans text-[0.7em] font-semibold tracking-[0.12em] text-accent uppercase">
-                In short
+                {free ? 'Most representative moments' : 'In short'}
               </p>
               <p dir="auto">{summary.tldr}</p>
             </blockquote>
@@ -150,7 +168,7 @@ export function ReaderPane({ result, lang, ttsCatalog, collapsed, onCollapse, on
             })}
 
             <p className="mt-14 border-t border-border pt-4 font-sans text-xs text-dim">
-              {costText(summary.usage, result.summary_cached)}
+              {costText(summary.usage, result.summary_cached, summary.method)}
             </p>
           </>
         ) : (

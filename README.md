@@ -1,6 +1,6 @@
 # Forte video summarizer
 
-Paste a YouTube link, pick a language, and get a summary you can **read, listen to and explore**: a short TL;DR plus timestamped sections that keep every distinct point from the video. It runs on your own computer.
+Paste a YouTube link and get a summary you can **read, listen to and explore**: a short TL;DR plus timestamped sections, with the video right next to it. It runs on your own computer, and it has a **free mode that needs no API key at all**.
 
 - **Studio layout:** your options and the video player on the left; a calm, distraction-free reading column on the right.
 - **Click any timestamp** to play the embedded video from that moment (⌘/Ctrl-click opens YouTube in a new tab).
@@ -9,6 +9,22 @@ Paste a YouTube link, pick a language, and get a summary you can **read, listen 
 - **Outline, collapsible sections, text size and copy** (as Markdown with timestamp links, or as plain text).
 - **Works without captions:** falls back to speech-to-text (local Whisper on Apple Silicon, or OpenAI).
 - **Cheap and cached:** the estimated cost is shown under each summary, and repeat visits are free.
+
+## Free or AI summary
+
+Switch between the two at the top of the sidebar.
+
+| | **Free** | **AI summary** |
+|---|---|---|
+| Cost | Nothing: no AI calls at all | A fraction of a cent per video, on your OpenAI key |
+| Needs an API key | No | Yes |
+| What you get | **Key moments**: the most representative parts of the video, picked by a classic ranking algorithm (TextRank) and quoted in the video's own words | A written TL;DR plus sections that cover every point, rewritten clearly |
+| Sections | The video's own YouTube chapters, or short time windows | Grouped by topic |
+| Language | The video's original language | Any of 12 languages you pick |
+| Videos without captions | Not supported | Transcribed with speech-to-text |
+| Player, timestamps, outline, read-aloud, copy | ✓ | ✓ |
+
+Free results have a **Get AI summary →** button that switches to AI mode with the same link.
 
 ---
 
@@ -21,7 +37,7 @@ Paste a YouTube link, pick a language, and get a summary you can **read, listen 
 | **Python 3.12** + [**uv**](https://docs.astral.sh/uv/) | Backend | `brew install uv` (or see uv's docs) |
 | **Node.js 20+** | Frontend | `brew install node` |
 | **ffmpeg** | Only for videos without captions (speech-to-text) | `brew install ffmpeg` |
-| **OpenAI API key** | AI summaries | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **OpenAI API key** | Only for AI summaries (Free mode works without one) | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 
 macOS (Apple Silicon recommended) and Linux both work. Local speech-to-text (`STT_ENGINE=local`) needs Apple Silicon; elsewhere use `STT_ENGINE=openai`.
 
@@ -36,7 +52,7 @@ cd ForteVideoSummarizer
 
 ```bash
 cd backend
-cp .env.example .env        # then open .env and paste your OPENAI_API_KEY
+cp .env.example .env        # for AI mode: open .env and paste your OPENAI_API_KEY
 uv sync                     # installs Python and all dependencies
 uv run --env-file .env uvicorn app.api.main:app --reload
 ```
@@ -55,9 +71,10 @@ npm run dev
 
 Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`: the backend only accepts requests from that address.
 
-1. Paste a YouTube link (`youtube.com/watch?v=…`, `youtu.be/…`, Shorts and live links all work).
-2. Pick the summary language and model, then press **Summarize**.
-3. Read on the right, click timestamps to jump around the video, or press **Listen**.
+1. Choose **Free** or **AI summary** at the top of the sidebar.
+2. Paste a YouTube link (`youtube.com/watch?v=…`, `youtu.be/…`, Shorts and live links all work).
+3. In AI mode, pick the summary language and model. Then press **Get key moments** or **Summarize**.
+4. Read on the right, click timestamps to jump around the video, or press **Listen**.
 
 > **First run:** the first time you press **Listen**, the Kokoro voice model (~350 MB) downloads automatically into `backend/.cache/models/`. The first video without captions downloads the Whisper model, too.
 
@@ -92,6 +109,7 @@ Frontend: `frontend/.env` can set `VITE_API_URL` (default `http://localhost:8000
 | **"OPENAI_MODEL is not set"** or **"API key was rejected"** | Check `backend/.env`, then restart the backend. |
 | **Read-aloud uses a robotic voice** | That's the device fallback, used for German, Korean, Arabic, Russian and Japanese, or when the backend can't generate speech. |
 | **Speech-to-text fails on Linux/Intel** | Set `STT_ENGINE=openai` in `backend/.env`. |
+| **"Free mode only uses captions"** | The video has no captions. Use AI summary, which transcribes the audio. |
 
 ---
 
@@ -107,7 +125,7 @@ frontend/                Vite + React + TypeScript + Tailwind
   src/components/        Sidebar, reader, toolbar, read-aloud, player
 ```
 
-How it works: URL → captions (or speech-to-text) → ~30 s blocks → ~12 min chunks summarized in parallel → merged into a TL;DR + sections → shown in the reader. More detail, and the design decisions, are in [`CLAUDE.md`](CLAUDE.md).
+How it works: **Free**: URL → captions → ~30 s blocks → TextRank picks the key blocks per chapter. **AI**: URL → captions (or speech-to-text) → ~30 s blocks → ~12 min chunks summarized in parallel → merged into a TL;DR + sections → shown in the reader. More detail, and the design decisions, are in [`CLAUDE.md`](CLAUDE.md).
 
 ## Running the tests
 

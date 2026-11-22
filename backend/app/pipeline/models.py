@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -77,4 +79,21 @@ class Usage(BaseModel):
 class Summary(BaseModel):
     tldr: str
     sections: list[Section]
-    usage: Usage | None = None  # None for summaries cached before usage was tracked
+    usage: Usage | None = None  # None for summaries cached before usage was tracked, and for free ones
+    # "ai": written by the LLM. "extractive": free key moments quoted from the captions (extract.py).
+    method: Literal["ai", "extractive"] = "ai"
+
+
+# --- Video metadata (yt-dlp, no download). ---
+
+
+class Chapter(BaseModel):
+    title: str
+    start: float
+    end: float | None = None
+
+
+class VideoMetadata(BaseModel):
+    title: str | None = None
+    language: str | None = None  # original spoken language, e.g. "en-US"
+    chapters: list[Chapter] = []
